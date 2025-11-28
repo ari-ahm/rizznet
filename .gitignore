@@ -1,0 +1,42 @@
+# --- Build Artifacts ---
+/rizznet
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# --- Database ---
+*.db
+*.db-journal
+*.db-wal
+# Ignore the specific db name defined in code
+rizznet.db
+
+# --- Configuration & Secrets ---
+config.yaml
+# Keep the example config if you create one
+!config.example.yaml
+
+# --- Telegram Session Files ---
+*.session
+telegram.session
+# gotd sometimes creates a directory for sessions
+session/
+
+# --- Logs & Output ---
+*.log
+*.out
+sub.txt
+subscription.b64
+
+# --- IDE & Editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# --- Go Specific ---
+# Vendor dir is optional, but usually ignored unless vendoring is explicit
+vendor/

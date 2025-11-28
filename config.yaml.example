@@ -1,0 +1,47 @@
+database:
+  path: "rizznet.db"
+  max_proxies: 10000 # Auto-prune if DB exceeds this size
+
+system_proxy:
+  enabled: true
+  fallback: "socks5://127.0.0.1:10808" # Used to scrape blocked sources (Telegram)
+
+tester:
+  health_timeout: 8s
+  speed_timeout: 45s
+  worker_count: 50
+  anneal_budget_mb: 500 # Stop testing after using this much traffic
+
+collectors:
+  - name: "telegram_channels"
+    type: "telegram"
+    params:
+      api_id: 123456        # Get from my.telegram.org
+      api_hash: "abcdef..." 
+      limit: 1000
+      chats:
+        - -100123456789
+
+categories:
+  - name: "speed"
+    strategy: "standard"
+    weight: 10
+    bucket_size: 20
+
+  - name: "clean_ip"
+    strategy: "standard"
+    weight: 8
+    bucket_size: 20
+    params:
+      require_clean: true
+
+publishers:
+  - name: "github_backup"
+    type: "github"
+    categories: [] # Publish all
+    params:
+      token: "ghp_yourtoken..."
+      owner: "youruser"
+      repo: "proxies"
+      path: "sub.txt"
+      base64: true
