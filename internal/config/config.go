@@ -31,10 +31,14 @@ type TesterConfig struct {
 	HealthTimeout time.Duration `yaml:"health_timeout"`
 	SpeedTimeout  time.Duration `yaml:"speed_timeout"`
 
-	HealthURL     string `yaml:"health_url"`
+	EchoURL string `yaml:"echo_url"`
+
+	// CHANGED: Split into two paths
+	GeoIPASNPath     string `yaml:"geoip_asn_path"`
+	GeoIPCountryPath string `yaml:"geoip_country_path"`
+
 	DirtyCheckURL string `yaml:"dirty_check_url"`
 	SpeedTestURL  string `yaml:"speed_test_url"`
-	SpeedTestSize int64  `yaml:"speed_test_size"`
 
 	WorkerCount    int `yaml:"worker_count"`
 	AnnealBudgetMB int `yaml:"anneal_budget_mb"`
@@ -49,7 +53,6 @@ type CollectorConfig struct {
 type CategoryConfig struct {
 	Name       string                 `yaml:"name"`
 	Strategy   string                 `yaml:"strategy"`
-	// MinScore removed
 	Weight     int                    `yaml:"weight"`
 	BucketSize int                    `yaml:"bucket_size"`
 	Params     map[string]interface{} `yaml:"params"`
@@ -76,10 +79,11 @@ func Load(path string) (*Config, error) {
 	// Defaults
 	cfg.Tester.HealthTimeout = 8 * time.Second
 	cfg.Tester.SpeedTimeout = 45 * time.Second
-	cfg.Tester.HealthURL = "http://www.gstatic.com/generate_204"
+	cfg.Tester.EchoURL = "http://api.ipify.org"
+	cfg.Tester.GeoIPASNPath = "GeoLite2-ASN.mmdb"
+	cfg.Tester.GeoIPCountryPath = "GeoLite2-Country.mmdb"
 	cfg.Tester.DirtyCheckURL = "https://developers.google.com"
-	cfg.Tester.SpeedTestURL = "https://speed.cloudflare.com/__down?bytes=10000000"
-	cfg.Tester.SpeedTestSize = 5 * 1024 * 1024
+	cfg.Tester.SpeedTestURL = "https://speed.cloudflare.com/__down?bytes=5000000"
 	cfg.Tester.WorkerCount = 50
 	cfg.Tester.AnnealBudgetMB = 500
 
@@ -99,8 +103,6 @@ func Load(path string) (*Config, error) {
 
 	return &cfg, nil
 }
-
-// --- Filtering Helpers ---
 
 func (c *Config) FilterCollectors(names []string) {
 	if len(names) == 0 {

@@ -4,6 +4,7 @@ go 1.25.4
 
 require (
 	github.com/gotd/td v0.134.0
+	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/spf13/cobra v1.10.1
 	github.com/xtls/xray-core v1.251015.0
 	go.uber.org/zap v1.27.1
@@ -42,6 +43,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/miekg/dns v1.1.68 // indirect
 	github.com/ogen-go/ogen v1.16.0 // indirect
+	github.com/oschwald/maxminddb-golang v1.13.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pires/go-proxyproto v0.8.1 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect

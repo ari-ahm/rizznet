@@ -62,7 +62,8 @@ var collectCmd = &cobra.Command{
 		var activeProxy string
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager...")
-			pm := xray.NewManager(database, cfg.SystemProxy.Fallback, cfg.Tester.HealthURL)
+			// Use EchoURL instead of HealthURL
+			pm := xray.NewManager(database, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {

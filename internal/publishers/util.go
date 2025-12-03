@@ -52,13 +52,17 @@ func GenerateSubscriptionPayload(categories []model.Category, config map[string]
 		catStr := strings.Join(cats, "|")
 
 		flag := getFlagEmoji(meta.Country)
-		dirt := ""
+		
+		metaFlags := ""
+		if meta.IsRotating {
+			metaFlags += " ♻️"
+		}
 		if meta.IsDirty {
-			dirt = " ⚠️"
+			metaFlags += " ⚠️"
 		}
 
-		// New Format: [Flag] [Dirt] [Country] [Cat1|Cat2]
-		p.Remarks = fmt.Sprintf("%s%s %s %s", flag, dirt, meta.Country, catStr)
+		// New Format: [Flag] [MetaFlags] [Country] [Cat1|Cat2]
+		p.Remarks = fmt.Sprintf("%s%s %s %s", flag, metaFlags, meta.Country, catStr)
 		
 		lines = append(lines, p.ToURI())
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +12,7 @@ import (
 	"rizznet/internal/db"
 	"rizznet/internal/engine"
 	"rizznet/internal/environment"
+	"rizznet/internal/geoip"
 	"rizznet/internal/logger"
 	"rizznet/internal/model"
 	"rizznet/internal/tester"
@@ -24,20 +24,27 @@ import (
 )
 
 var (
-	flagWorkers int
-	flagBudget  int
-	flagFast    bool
+	flagWorkers         int
+	flagBudget          int
+	flagFast            bool
+	flagOnlyCategorized bool
+	flagTopK            int
 )
 
 var testCmd = &cobra.Command{
 	Use:   "test [category_names...]",
 	Short: "Optimize proxies using Simulated Annealing",
-	Long:  `Run the optimization engine. Use --fast to skip the initial health check.`,
+	Long:  `Run the optimization engine. Use --fast to skip the initial health check. Use --top-k or --only-categorized to filter selection.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg, err := config.Load(cfgFile)
 		if err != nil {
 			logger.Log.Fatalf("Error loading config: %v", err)
 		}
+
+		if err := geoip.Init(cfg.Tester.GeoIPASNPath, cfg.Tester.GeoIPCountryPath); err != nil {
+				logger.Log.Fatalf("Failed to init GeoIP: %v", err)
+		}
+		defer geoip.Close()
 
 		if flagWorkers > 0 {
 			cfg.Tester.WorkerCount = flagWorkers
@@ -61,31 +68,61 @@ var testCmd = &cobra.Command{
 			logger.Log.Fatalf("Environment check failed: %v", err)
 		}
 
-		var candidates []model.Proxy
-		historyEngine := engine.NewHistoryEngine(database)
+		// --- 1. Candidate Selection Logic ---
+		logger.Log.Info("🔍 Selecting candidates for testing...")
+		query := database.Model(&model.Proxy{})
 
-		if flagFast {
-			logger.Log.Info("⏩ Fast mode enabled: Skipping global health check.")
-			database.Find(&candidates)
-		} else {
-			candidates = runHealthCheckLayer(database, historyEngine, cfg.Tester, env)
+		// Flag: Only Categorized
+		if flagOnlyCategorized {
+			query = query.Where("id IN (?)", database.Table("proxy_categories").Select("proxy_id"))
+			logger.Log.Info("   -> Filter: Only proxies already in a category")
+		}
+
+		// Flag: Top K
+		if flagTopK > 0 {
+			query = query.Select("proxies.*").
+				Joins("LEFT JOIN proxy_performances pp ON pp.proxy_id = proxies.id AND pp.user_isp = ?", env.ISP).
+				Order("COALESCE(pp.score, 0) DESC").
+				Limit(flagTopK)
+			logger.Log.Infof("   -> Filter: Top %d proxies by historical score", flagTopK)
+		}
+
+		var candidates []model.Proxy
+		if err := query.Find(&candidates).Error; err != nil {
+			logger.Log.Fatalf("Failed to fetch candidates: %v", err)
 		}
 
 		if len(candidates) == 0 {
-			logger.Log.Error("❌ No candidates found. Exiting.")
+			logger.Log.Error("❌ No candidates found matching criteria. Exiting.")
+			return
+		}
+		logger.Log.Infof("   -> Target Count: %d", len(candidates))
+
+		// --- 2. Health Check Layer ---
+		historyEngine := engine.NewHistoryEngine(database)
+
+		var survivors []model.Proxy
+		if flagFast {
+			logger.Log.Info("⏩ Fast mode enabled: Skipping global health check.")
+			survivors = candidates
+		} else {
+			survivors = runHealthCheckLayer(database, historyEngine, cfg.Tester, env, candidates)
+		}
+
+		if len(survivors) == 0 {
+			logger.Log.Error("❌ No survivors after health check. Exiting.")
 			return
 		}
 
-		annealer, err := engine.NewAnnealer(database, *cfg, env, candidates, flagFast)
+		// --- 3. Annealing ---
+		annealer, err := engine.NewAnnealer(database, *cfg, env, survivors, flagFast)
 		if err != nil {
 			logger.Log.Fatalf("Failed to init annealer: %v", err)
 		}
 
 		annealer.Run(cfg.Tester.AnnealBudgetMB)
 
-		// --- AGGRESSIVE PRUNING ---
-		// Only run this if we did a FULL test (not fast mode).
-		// We cut the DB size to 70% of max to make room for fresh proxies next cycle.
+		// --- 4. Pruning ---
 		if !flagFast {
 			aggressiveLimit := int(float64(cfg.Database.MaxProxies) * 0.7)
 			logger.Log.Infof("🧹 Running Aggressive Post-Test Pruning (Target: %d)...", aggressiveLimit)
@@ -104,35 +141,32 @@ func runHealthCheckLayer(
 	hist *engine.HistoryEngine,
 	testCfg config.TesterConfig,
 	env *environment.Env,
+	inputProxies []model.Proxy,
 ) []model.Proxy {
 	batchSize := testCfg.WorkerCount
 	if batchSize <= 0 {
 		batchSize = 20
 	}
 
-	var allProxies []model.Proxy
-	database.Find(&allProxies)
-	totalCount := len(allProxies)
+	totalCount := len(inputProxies)
 	if totalCount == 0 {
 		return []model.Proxy{}
 	}
 
-	logger.Log.Infof("🔎 Running Batch Health Check (Batch Size: %d, Total: %d)...", batchSize, totalCount)
+	logger.Log.Infof("🔎 Running Batch Health Check & Analysis (Batch Size: %d, Total: %d)...", batchSize, totalCount)
 
 	var survivors []model.Proxy
 	var survivorsLock sync.Mutex
 	var processedCount int32
 
-	directClient := &http.Client{
-		Timeout: testCfg.HealthTimeout,
-	}
+	t := tester.New(testCfg)
 
 	for i := 0; i < totalCount; i += batchSize {
 		end := i + batchSize
 		if end > totalCount {
 			end = totalCount
 		}
-		batch := allProxies[i:end]
+		batch := inputProxies[i:end]
 
 		var links []string
 		for _, p := range batch {
@@ -147,7 +181,6 @@ func runHealthCheckLayer(
 		}
 
 		var wg sync.WaitGroup
-		t := tester.New(testCfg)
 
 		for _, p := range batch {
 			port, ok := portMap[p.Raw]
@@ -160,23 +193,25 @@ func runHealthCheckLayer(
 			go func(proxy model.Proxy, localPort int) {
 				defer wg.Done()
 				
-				proxiedClient := t.MakeClient(localPort, testCfg.HealthTimeout)
+				analyzeClient := t.MakeClient(localPort, testCfg.HealthTimeout)
 
-				_, err := t.HealthCheck(proxiedClient)
+				res, err := t.Analyze(analyzeClient)
+				
 				if err != nil {
 					hist.UpdateHistory(proxy.ID, env.ISP, 0.0, env.BaselineSpeed)
 				} else {
-					if proxy.ISP == "" || proxy.Country == "" {
-						if meta, err := t.MetadataCheck(proxiedClient); err == nil {
-							proxy.IP = meta.IP
-							proxy.ISP = meta.ISP
-							proxy.Country = meta.Country
-							proxy.IsDirty = meta.IsDirty
-						}
+					proxy.IP = res.IP
+					proxy.ISP = res.ISP
+					proxy.Country = res.Country
+					proxy.IsDirty = res.IsDirty
+					
+					// Rotation check
+					if !proxy.IsRotating && proxy.ISP != "" && (proxy.ISP != res.ISP || proxy.Country != res.Country) {
+						proxy.IsRotating = true
 					}
 
 					if proxy.EntryISP == "" && proxy.Address != "" {
-						if inMeta, err := t.FetchHostMetadata(directClient, proxy.Address); err == nil {
+						if inMeta, err := t.ResolveHost(proxy.Address); err == nil {
 							proxy.EntryIP = inMeta.IP
 							proxy.EntryISP = inMeta.ISP
 							proxy.EntryCountry = inMeta.Country
@@ -186,7 +221,7 @@ func runHealthCheckLayer(
 					database.Clauses(clause.OnConflict{
 						Columns:   []clause.Column{{Name: "id"}},
 						DoUpdates: clause.AssignmentColumns([]string{
-							"ip", "isp", "country", "is_dirty", 
+							"ip", "isp", "country", "is_dirty", "is_rotating",
 							"entry_ip", "entry_isp", "entry_country",
 						}),
 					}).Create(&proxy)
@@ -223,5 +258,9 @@ func init() {
 	testCmd.Flags().IntVar(&flagWorkers, "workers", 0, "Override worker count")
 	testCmd.Flags().IntVar(&flagBudget, "budget", 0, "Override data budget (MB)")
 	testCmd.Flags().BoolVar(&flagFast, "fast", false, "Skip initial health check")
+	
+	testCmd.Flags().BoolVar(&flagOnlyCategorized, "only-categorized", false, "Only test proxies that are already in a category")
+	testCmd.Flags().IntVar(&flagTopK, "top-k", 0, "Only test the top K proxies based on historical score")
+	
 	rootCmd.AddCommand(testCmd)
 }

@@ -40,3 +40,7 @@ subscription.b64
 # --- Go Specific ---
 # Vendor dir is optional, but usually ignored unless vendoring is explicit
 vendor/
+
+
+*.mmdb
+

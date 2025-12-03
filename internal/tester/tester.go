@@ -1,15 +1,16 @@
 package tester
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"rizznet/internal/config"
+	"rizznet/internal/geoip"
 	"rizznet/internal/xray"
 )
 
@@ -17,7 +18,7 @@ type Tester struct {
 	cfg config.TesterConfig
 }
 
-type MetadataResult struct {
+type AnalysisResult struct {
 	IP      string
 	ISP     string
 	Country string
@@ -28,72 +29,66 @@ func New(cfg config.TesterConfig) *Tester {
 	return &Tester{cfg: cfg}
 }
 
-func (t *Tester) HealthCheck(client *http.Client) (time.Duration, error) {
-	start := time.Now()
-	resp, err := client.Get(t.cfg.HealthURL)
+// Analyze replaces HealthCheck and MetadataCheck.
+// It connects via proxy, hits the EchoURL to get IP, then looks up metadata locally.
+func (t *Tester) Analyze(client *http.Client) (*AnalysisResult, error) {
+	// 1. Fetch IP (Echo / Health)
+	resp, err := client.Get(t.cfg.EchoURL)
 	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return 0, fmt.Errorf("health check failed with status: %d", resp.StatusCode)
-	}
-	return time.Since(start), nil
-}
-
-func (t *Tester) HealthCheckFromLink(link string) (time.Duration, error) {
-	port, instance, err := xray.StartEphemeral(link)
-	if err != nil {
-		return 0, err
-	}
-	defer instance.Close()
-	return t.HealthCheck(t.MakeClient(port, t.cfg.HealthTimeout))
-}
-
-func (t *Tester) MetadataCheck(client *http.Client) (*MetadataResult, error) {
-	resp, err := client.Get("http://ip-api.com/json")
-	if err != nil {
-		return nil, fmt.Errorf("metadata fetch failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var apiData struct {
-		Query       string `json:"query"`
-		ISP         string `json:"isp"`
-		CountryCode string `json:"countryCode"`
-		Status      string `json:"status"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&apiData); err != nil {
 		return nil, err
 	}
-	if apiData.Status != "success" {
-		return nil, fmt.Errorf("ip-api returned error status")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("echo failed with status: %d", resp.StatusCode)
 	}
 
-	res := &MetadataResult{
-		IP:      apiData.Query,
-		ISP:     apiData.ISP,
-		Country: apiData.CountryCode,
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
 	}
 
-	dirtyResp, err := client.Get(t.cfg.DirtyCheckURL)
-	if err == nil && dirtyResp.StatusCode == 200 {
-		res.IsDirty = false
-		dirtyResp.Body.Close()
-	} else {
-		res.IsDirty = true
+	// Clean up IP string (trim whitespace)
+	ipStr := strings.TrimSpace(string(body))
+	if ipStr == "" {
+		return nil, fmt.Errorf("empty response from echo service")
 	}
+
+	// 2. Local GeoIP Lookup
+	geo, err := geoip.Lookup(ipStr)
+	if err != nil {
+		// If GeoIP fails, we still have a working proxy, return bare minimum
+		geo = &geoip.GeoResult{ISP: "Unknown", Country: "XX"}
+	}
+
+	res := &AnalysisResult{
+		IP:      ipStr,
+		ISP:     geo.ISP,
+		Country: geo.Country,
+		IsDirty: false,
+	}
+
+	// 3. Dirty Check (Optional)
+	if t.cfg.DirtyCheckURL != "" {
+		dirtyResp, err := client.Get(t.cfg.DirtyCheckURL)
+		if err == nil && dirtyResp.StatusCode == 200 {
+			res.IsDirty = false
+			dirtyResp.Body.Close()
+		} else {
+			res.IsDirty = true
+		}
+	}
+
 	return res, nil
 }
 
-func (t *Tester) MetadataCheckFromLink(link string) (*MetadataResult, error) {
+func (t *Tester) AnalyzeFromLink(link string) (*AnalysisResult, error) {
 	port, instance, err := xray.StartEphemeral(link)
 	if err != nil {
 		return nil, err
 	}
 	defer instance.Close()
-	return t.MetadataCheck(t.MakeClient(port, t.cfg.HealthTimeout))
+	return t.Analyze(t.MakeClient(port, t.cfg.HealthTimeout))
 }
 
 func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
@@ -149,37 +144,26 @@ func (t *Tester) MakeClient(port int, timeout time.Duration) *http.Client {
 	}
 }
 
-// FetchHostMetadata resolves the target host (IP or Domain) using a DIRECT connection.
-// This tells us the ISP of the proxy server itself (Entry Point).
-func (t *Tester) FetchHostMetadata(client *http.Client, host string) (*MetadataResult, error) {
-	// ip-api.com/json/{query} allows querying a specific IP/Domain
-	url := fmt.Sprintf("http://ip-api.com/json/%s", host)
-	
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("inbound fetch failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var apiData struct {
-		Query       string `json:"query"` // The resolved IP
-		ISP         string `json:"isp"`
-		CountryCode string `json:"countryCode"`
-		Status      string `json:"status"`
-	}
-	
-	if err := json.NewDecoder(resp.Body).Decode(&apiData); err != nil {
-		return nil, err
-	}
-	
-	if apiData.Status != "success" {
-		return nil, fmt.Errorf("ip-api error for host %s", host)
+// ResolveHost resolves the target host to an IP and looks up metadata locally.
+func (t *Tester) ResolveHost(host string) (*AnalysisResult, error) {
+	// If host is already an IP
+	if net.ParseIP(host) != nil {
+		geo, _ := geoip.Lookup(host)
+		return &AnalysisResult{IP: host, ISP: geo.ISP, Country: geo.Country}, nil
 	}
 
-	return &MetadataResult{
-		IP:      apiData.Query,
-		ISP:     apiData.ISP,
-		Country: apiData.CountryCode,
-		IsDirty: false, // Not applicable for inbound
+	// DNS Lookup
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return nil, fmt.Errorf("dns lookup failed for %s", host)
+	}
+	
+	ipStr := ips[0].String()
+	geo, _ := geoip.Lookup(ipStr)
+	
+	return &AnalysisResult{
+		IP:      ipStr,
+		ISP:     geo.ISP,
+		Country: geo.Country,
 	}, nil
 }

@@ -57,7 +57,8 @@ var publishCmd = &cobra.Command{
 		var activeProxy string
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager for publishing...")
-			pm := xray.NewManager(database, cfg.SystemProxy.Fallback, cfg.Tester.HealthURL)
+			// Use EchoURL instead of HealthURL
+			pm := xray.NewManager(database, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {
@@ -83,9 +84,6 @@ var publishCmd = &cobra.Command{
 
 			var categoriesToPublish []model.Category
 
-			// MODIFIED LOGIC:
-			// If categories are specified, fetch only those.
-			// Otherwise, fetch ALL categories.
 			if len(pubCfg.Categories) > 0 {
 				database.Preload("Proxies").Where("name IN ?", pubCfg.Categories).Find(&categoriesToPublish)
 			} else {

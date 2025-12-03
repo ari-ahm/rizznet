@@ -21,10 +21,11 @@ type Proxy struct {
 	EntryCountry string
 
 	// Exit Metadata (Outbound - What the world sees)
-	Country string
-	ISP     string
-	IP      string
-	IsDirty bool
+	Country    string
+	ISP        string
+	IP         string
+	IsDirty    bool
+	IsRotating bool
 
 	// Relationships
 	Performances []ProxyPerformance `gorm:"foreignKey:ProxyID"`

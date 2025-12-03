@@ -17,16 +17,15 @@ func Detect(cfg config.TesterConfig) (*Env, error) {
 	logger.Log.Info("🌍 Detecting Environment...")
 
 	t := tester.New(cfg)
+	directClient := &http.Client{Timeout: cfg.HealthTimeout}
 
-	directClientHealth := &http.Client{Timeout: cfg.HealthTimeout}
-
-	meta, err := t.MetadataCheck(directClientHealth)
+	meta, err := t.Analyze(directClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect ISP: %w", err)
 	}
-	logger.Log.Infof("   -> Current ISP: %s (%s)", meta.ISP, meta.Country)
+	logger.Log.Infof("   -> Current ISP: %s (%s) [IP: %s]", meta.ISP, meta.Country, meta.IP)
 
-	fmt.Print("   -> Measuring Baseline Speed... ") // Keep fmt for single line update if needed, or use Log
+	fmt.Print("   -> Measuring Baseline Speed... ") 
 	directClientSpeed := &http.Client{Timeout: cfg.SpeedTimeout}
 
 	speed, _, err := t.SpeedCheck(directClientSpeed)

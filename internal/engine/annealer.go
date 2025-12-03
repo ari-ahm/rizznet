@@ -155,37 +155,52 @@ func (a *Annealer) Run(maxDataMB int) {
 			continue
 		}
 
-		// 2. Health Check (Only in Fast Mode/Strict)
 		if a.strictHealthCheck {
-			healthClient := a.tester.MakeClient(port, a.testerCfg.HealthTimeout)
-			if _, err := a.tester.HealthCheck(healthClient); err != nil {
+			analyzeClient := a.tester.MakeClient(port, a.testerCfg.HealthTimeout)
+			res, err := a.tester.Analyze(analyzeClient)
+			
+			if err != nil {
+				// Failed analysis = Dead
 				instance.Close()
 				a.history.UpdateHistory(candidate.Proxy.ID, a.env.ISP, 0.0, a.env.BaselineSpeed)
 				continue
 			}
+
+			// ROTATION CHECK LOGIC
+			isRotating := candidate.Proxy.IsRotating
+			
+			if !isRotating {
+				// Ensure we have previous data to compare against
+				if candidate.Proxy.ISP != "" && candidate.Proxy.Country != "" {
+					// Compare NEW vs OLD
+					if res.ISP != candidate.Proxy.ISP || res.Country != candidate.Proxy.Country {
+						isRotating = true
+						logger.Log.Debugf("🔄 Detected Rotation for Proxy %d: %s/%s -> %s/%s", 
+							candidate.Proxy.ID, candidate.Proxy.ISP, candidate.Proxy.Country, res.ISP, res.Country)
+					}
+				}
+			}
+
+			// Update Proxy Object
+			candidate.Proxy.IP = res.IP
+			candidate.Proxy.ISP = res.ISP
+			candidate.Proxy.Country = res.Country
+			candidate.Proxy.IsDirty = res.IsDirty
+			candidate.Proxy.IsRotating = isRotating
+
+			// Persist Updates immediately
+			go func(p model.Proxy) {
+				a.db.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "id"}},
+					DoUpdates: clause.AssignmentColumns([]string{"ip", "isp", "country", "is_dirty", "is_rotating"}),
+				}).Create(&p)
+			}(candidate.Proxy)
 		}
 
 		// 3. Speed Check
 		speedClient := a.tester.MakeClient(port, a.testerCfg.SpeedTimeout)
 		mbps, bytesDownloaded, err := a.tester.SpeedCheck(speedClient)
 		
-		// 4. Opportunistic Metadata Update
-		if candidate.Proxy.ISP == "" || candidate.Proxy.Country == "" {
-			if meta, err := a.tester.MetadataCheck(speedClient); err == nil {
-				candidate.Proxy.IP = meta.IP
-				candidate.Proxy.ISP = meta.ISP
-				candidate.Proxy.Country = meta.Country
-				candidate.Proxy.IsDirty = meta.IsDirty
-				
-				go func(p model.Proxy) {
-					a.db.Clauses(clause.OnConflict{
-						Columns:   []clause.Column{{Name: "id"}},
-						DoUpdates: clause.AssignmentColumns([]string{"ip", "isp", "country", "is_dirty"}),
-					}).Create(&p)
-				}(candidate.Proxy)
-			}
-		}
-
 		instance.Close()
 
 		mbDownloaded := float64(bytesDownloaded) / (1024 * 1024)
