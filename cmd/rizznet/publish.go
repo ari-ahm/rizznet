@@ -58,7 +58,7 @@ var publishCmd = &cobra.Command{
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager for publishing...")
 			// Use EchoURL instead of HealthURL
-			pm := xray.NewManager(database, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
+			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {

@@ -42,7 +42,7 @@ var testCmd = &cobra.Command{
 		}
 
 		if err := geoip.Init(cfg.Tester.GeoIPASNPath, cfg.Tester.GeoIPCountryPath); err != nil {
-				logger.Log.Fatalf("Failed to init GeoIP: %v", err)
+			logger.Log.Fatalf("Failed to init GeoIP: %v", err)
 		}
 		defer geoip.Close()
 
@@ -123,15 +123,12 @@ var testCmd = &cobra.Command{
 		annealer.Run(cfg.Tester.AnnealBudgetMB)
 
 		// --- 4. Pruning ---
-		if !flagFast {
-			aggressiveLimit := int(float64(cfg.Database.MaxProxies) * 0.7)
-			logger.Log.Infof("🧹 Running Aggressive Post-Test Pruning (Target: %d)...", aggressiveLimit)
-			
-			if err := engine.PruneDatabase(database, cfg, aggressiveLimit); err != nil {
-				logger.Log.Errorf("Aggressive pruning failed: %v", err)
-			} else {
-				logger.Log.Info("✨ Aggressive pruning complete.")
-			}
+		logger.Log.Info("🧹 Running Database Maintenance...")
+		// Passing 0 tells the Pruner to use cfg.Database.MaxProxies
+		if err := engine.PruneDatabase(database, cfg, 0); err != nil {
+			logger.Log.Errorf("Pruning failed: %v", err)
+		} else {
+			logger.Log.Info("✨ Database maintenance complete.")
 		}
 	},
 }
@@ -192,11 +189,11 @@ func runHealthCheckLayer(
 			wg.Add(1)
 			go func(proxy model.Proxy, localPort int) {
 				defer wg.Done()
-				
+
 				analyzeClient := t.MakeClient(localPort, testCfg.HealthTimeout)
 
 				res, err := t.Analyze(analyzeClient)
-				
+
 				if err != nil {
 					hist.UpdateHistory(proxy.ID, env.ISP, 0.0, env.BaselineSpeed)
 				} else {
@@ -204,7 +201,7 @@ func runHealthCheckLayer(
 					proxy.ISP = res.ISP
 					proxy.Country = res.Country
 					proxy.IsDirty = res.IsDirty
-					
+
 					// Rotation check
 					if !proxy.IsRotating && proxy.ISP != "" && (proxy.ISP != res.ISP || proxy.Country != res.Country) {
 						proxy.IsRotating = true
@@ -239,7 +236,7 @@ func runHealthCheckLayer(
 		wg.Wait()
 		instance.Close()
 	}
-	fmt.Print("\n") 
+	fmt.Print("\n")
 	logger.Log.Infof("✅ Health Check Complete. Survivors: %d/%d", len(survivors), totalCount)
 	return survivors
 }
@@ -258,9 +255,9 @@ func init() {
 	testCmd.Flags().IntVar(&flagWorkers, "workers", 0, "Override worker count")
 	testCmd.Flags().IntVar(&flagBudget, "budget", 0, "Override data budget (MB)")
 	testCmd.Flags().BoolVar(&flagFast, "fast", false, "Skip initial health check")
-	
+
 	testCmd.Flags().BoolVar(&flagOnlyCategorized, "only-categorized", false, "Only test proxies that are already in a category")
 	testCmd.Flags().IntVar(&flagTopK, "top-k", 0, "Only test the top K proxies based on historical score")
-	
+
 	rootCmd.AddCommand(testCmd)
 }

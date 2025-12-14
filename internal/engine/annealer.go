@@ -68,14 +68,16 @@ func NewAnnealer(db *gorm.DB, cfg config.Config, env *environment.Env, aliveProx
 	for _, p := range aliveProxies {
 		priority := CalculateGlobalPriority(p, hist, env.ISP, cfg.Categories)
 		
-		if priority > 0 {
-			var matchingIndices []int
-			for i, ctx := range catContexts {
-				if ctx.Strategy.IsCandidate(p, ctx.Config.Params) {
-					matchingIndices = append(matchingIndices, i)
-				}
+		var matchingIndices []int
+		for i, ctx := range catContexts {
+			if ctx.Strategy.IsCandidate(p, ctx.Config.Params) {
+				matchingIndices = append(matchingIndices, i)
 			}
+		}
 
+		// Changed: We add the candidate if it matches ANY category, 
+		// regardless of whether its calculated priority is > 0.
+		if len(matchingIndices) > 0 {
 			candidates = append(candidates, Candidate{
 				Proxy:              p,
 				PredictedScore:     hist.GetPredictiveScore(p.ID, env.ISP),
@@ -205,8 +207,10 @@ func (a *Annealer) Run(maxDataMB int) {
 
 		mbDownloaded := float64(bytesDownloaded) / (1024 * 1024)
 		dataUsed += mbDownloaded
+		
+		// If real error (not partial download success), update with 0
 		if err != nil {
-			dataUsed += 0.2
+			dataUsed += 0.2 // small penalty for connection attempts
 			mbps = 0
 		}
 

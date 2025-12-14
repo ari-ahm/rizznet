@@ -29,10 +29,7 @@ func New(cfg config.TesterConfig) *Tester {
 	return &Tester{cfg: cfg}
 }
 
-// Analyze replaces HealthCheck and MetadataCheck.
-// It connects via proxy, hits the EchoURL to get IP, then looks up metadata locally.
 func (t *Tester) Analyze(client *http.Client) (*AnalysisResult, error) {
-	// 1. Fetch IP (Echo / Health)
 	resp, err := client.Get(t.cfg.EchoURL)
 	if err != nil {
 		return nil, err
@@ -94,7 +91,7 @@ func (t *Tester) AnalyzeFromLink(link string) (*AnalysisResult, error) {
 func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
 	req, _ := http.NewRequest("GET", t.cfg.SpeedTestURL, nil)
 
-	start := time.Now()
+	// Note: We do NOT start the timer here. We exclude TTFB.
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, 0, err
@@ -105,19 +102,44 @@ func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
 		return 0, 0, fmt.Errorf("speedtest download failed: %d", resp.StatusCode)
 	}
 
+	// Start timer ONLY after headers are received and body is ready to stream
+	start := time.Now()
+
 	buf := make([]byte, 32*1024)
-	written, err := io.CopyBuffer(io.Discard, resp.Body, buf)
+	var written int64
+	var readErr error
+
+	for {
+		nr, er := resp.Body.Read(buf)
+		if nr > 0 {
+			written += int64(nr)
+		}
+		if er != nil {
+			if er != io.EOF {
+				readErr = er
+			}
+			break
+		}
+	}
 
 	duration := time.Since(start)
+
+	// Logic: If we hit an error (timeout, connection reset) BUT we downloaded
+	// enough data (MinDownloadSize), we consider it a valid test result.
+	if readErr != nil {
+		if written < t.cfg.MinDownloadSize {
+			return 0, written, fmt.Errorf("download failed (only %d bytes): %w", written, readErr)
+		}
+		// If written >= MinDownloadSize, we proceed to calculate speed despite the error
+	}
+
 	if duration.Seconds() == 0 {
-		return 0, written, fmt.Errorf("download too fast")
+		return 0, written, fmt.Errorf("download too fast or duration zero")
 	}
 
 	bits := float64(written) * 8
 	mbps := (bits / duration.Seconds()) / 1_000_000
-	if err != nil && err != io.EOF {
-		return mbps, written, err
-	}
+
 	return mbps, written, nil
 }
 

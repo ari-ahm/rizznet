@@ -9,7 +9,6 @@ import (
 	_ "rizznet/internal/collectors/telegram"
 	"rizznet/internal/config"
 	"rizznet/internal/db"
-	"rizznet/internal/engine"
 	"rizznet/internal/logger"
 	"rizznet/internal/model"
 	"rizznet/internal/xray"
@@ -63,7 +62,7 @@ var collectCmd = &cobra.Command{
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager...")
 			// Use EchoURL instead of HealthURL
-			pm := xray.NewManager(database, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
+			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {
@@ -116,20 +115,12 @@ var collectCmd = &cobra.Command{
 					Columns:   []clause.Column{{Name: "hash"}},
 					DoNothing: true,
 				}).Create(&proxy)
-				
+
 				if result.RowsAffected > 0 {
 					savedCount++
 				}
 			}
 			logger.Log.Infof("✅ Collector %s finished. Saved %d new unique proxies.", cCfg.Name, savedCount)
-		}
-
-		// Standard Pruning (Limit = MaxProxies)
-		logger.Log.Info("🧹 Running Standard Database Maintenance...")
-		if err := engine.PruneDatabase(database, cfg, 0); err != nil {
-			logger.Log.Errorf("Pruning failed: %v", err)
-		} else {
-			logger.Log.Info("✨ Database pruned successfully.")
 		}
 	},
 }

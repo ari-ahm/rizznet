@@ -15,15 +15,17 @@ import (
 
 type Manager struct {
 	db              *gorm.DB
+	category        string
 	fallback        string
 	healthURL       string
 	currentInstance *core.Instance
 	currentPort     int
 }
 
-func NewManager(database *gorm.DB, fallback string, healthURL string) *Manager {
+func NewManager(database *gorm.DB, category string, fallback string, healthURL string) *Manager {
 	return &Manager{
 		db:        database,
+		category:  category,
 		fallback:  fallback,
 		healthURL: healthURL,
 	}
@@ -32,7 +34,12 @@ func NewManager(database *gorm.DB, fallback string, healthURL string) *Manager {
 func (m *Manager) GetProxy() (string, error) {
 	var category model.Category
 
-	result := m.db.Preload("Proxies").Where("name = ?", "speed").Limit(1).Find(&category)
+	targetCat := m.category
+	if targetCat == "" {
+		targetCat = "speed"
+	}
+
+	result := m.db.Preload("Proxies").Where("name = ?", targetCat).Limit(1).Find(&category)
 	if result.Error != nil || result.RowsAffected == 0 || len(category.Proxies) == 0 {
 		return m.fallback, nil
 	}
