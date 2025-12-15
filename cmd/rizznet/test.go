@@ -61,6 +61,7 @@ var testCmd = &cobra.Command{
 		if err != nil {
 			logger.Log.Fatalf("Error connecting to DB: %v", err)
 		}
+		defer db.Close(database)
 		db.Migrate(database)
 
 		env, err := environment.Detect(cfg.Tester)

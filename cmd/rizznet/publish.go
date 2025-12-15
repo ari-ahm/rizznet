@@ -53,6 +53,8 @@ var publishCmd = &cobra.Command{
 		if err != nil {
 			logger.Log.Fatalf("Error connecting to DB: %v", err)
 		}
+		defer db.Close(database)
+		db.Migrate(database)
 
 		var activeProxy string
 		if cfg.SystemProxy.Enabled && !noProxy {

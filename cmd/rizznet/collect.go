@@ -56,6 +56,7 @@ var collectCmd = &cobra.Command{
 		if err != nil {
 			logger.Log.Fatalf("Error connecting to DB: %v", err)
 		}
+		defer db.Close(database)
 		db.Migrate(database)
 
 		var activeProxy string
@@ -93,34 +94,33 @@ var collectCmd = &cobra.Command{
 				continue
 			}
 
-			savedCount := 0
-			for _, raw := range rawLinks {
-				profile, err := parser.Parse(raw)
-				if err != nil {
-					continue
-				}
+			var batch []model.Proxy
+            
+            for _, raw := range rawLinks {
+                profile, err := parser.Parse(raw)
+                if err != nil {
+                    continue
+                }
 
-				hash := profile.CalculateHash()
+                hash := profile.CalculateHash()
+                
+                batch = append(batch, model.Proxy{
+                    Raw:       raw,
+                    Hash:      hash,
+                    Source:    cCfg.Name,
+                    CreatedAt: time.Now(),
+                    Address:   profile.Address,
+                    Port:      profile.Port,
+                })
+            }
 
-				proxy := model.Proxy{
-					Raw:       raw,
-					Hash:      hash,
-					Source:    cCfg.Name,
-					CreatedAt: time.Now(),
-					Address:   profile.Address,
-					Port:      profile.Port,
-				}
-
-				result := database.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "hash"}},
-					DoNothing: true,
-				}).Create(&proxy)
-
-				if result.RowsAffected > 0 {
-					savedCount++
-				}
-			}
-			logger.Log.Infof("✅ Collector %s finished. Saved %d new unique proxies.", cCfg.Name, savedCount)
+            // Batch Insert (Chunk size 500)
+            result := database.Clauses(clause.OnConflict{
+                Columns:   []clause.Column{{Name: "hash"}},
+                DoNothing: true,
+            }).CreateInBatches(batch, 500)
+            
+            logger.Log.Infof("✅ Collector %s finished. Processed %d links.", cCfg.Name, result.RowsAffected)
 		}
 	},
 }
