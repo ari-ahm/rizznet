@@ -120,13 +120,7 @@ var testCmd = &cobra.Command{
 
 		annealer.Run(cfg.Tester.AnnealBudgetMB)
 
-		// --- 4. Pruning ---
-		logger.Log.Info("🧹 Running Database Maintenance...")
-		if err := engine.PruneDatabase(database, cfg, 0); err != nil {
-			logger.Log.Errorf("Pruning failed: %v", err)
-		} else {
-			logger.Log.Info("✨ Database maintenance complete.")
-		}
+		logger.Log.Info("✅ Testing and optimization complete.")
 	},
 }
 
@@ -148,6 +142,12 @@ func runHealthCheckLayer(
 	}
 
 	logger.Log.Infof("🔎 Running Health Check on %d proxies...", totalCount)
+
+	poolPorts, err := xray.GetFreePorts(batchSize)
+	if err != nil {
+		logger.Log.Fatalf("Failed to allocate port pool: %v", err)
+	}
+	logger.Log.Debugf("Allocated port pool: %v", poolPorts)
 
 	bar := progressbar.NewOptions(totalCount,
 		progressbar.OptionEnableColorCodes(true),
@@ -180,7 +180,9 @@ func runHealthCheckLayer(
 			links = append(links, p.Raw)
 		}
 
-		portMap, instance, err := xray.StartMultiEphemeral(links)
+		currentPorts := poolPorts[:len(batch)]
+
+		portMap, instance, err := xray.StartOnPorts(links, currentPorts)
 		if err != nil {
 			logger.Log.Warnf("Batch failed Xray start: %v", err)
 			bar.Add(len(batch))
