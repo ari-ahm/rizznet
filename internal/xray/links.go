@@ -4,11 +4,28 @@ import (
 	"bufio"
 	"regexp"
 	"strings"
+
+	"rizznet/internal/xray/parser"
 )
 
 var regexLink = regexp.MustCompile(`(vmess|vless|trojan|ss|socks|socks5|http|https|wireguard|hysteria2|hy2)://[a-zA-Z0-9_\-\.\:@\?=&%#+/]+`)
 
 func ExtractLinks(text string) []string {
+	if !strings.Contains(text, "://") {
+		cleanBase64 := strings.Map(func(r rune) rune {
+			if r == '\n' || r == '\r' || r == ' ' || r == '\t' {
+				return -1
+			}
+			return r
+		}, text)
+
+		if decoded, err := parser.DecodeBase64(cleanBase64); err == nil {
+			if strings.Contains(decoded, "://") {
+				text = decoded
+			}
+		}
+	}
+
 	var links []string
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	scanner := bufio.NewScanner(strings.NewReader(text))

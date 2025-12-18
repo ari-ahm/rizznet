@@ -9,7 +9,6 @@ import (
 	_ "rizznet/internal/collectors/telegram"
 	"rizznet/internal/config"
 	"rizznet/internal/db"
-	"rizznet/internal/engine"
 	"rizznet/internal/logger"
 	"rizznet/internal/model"
 	"rizznet/internal/xray"
@@ -57,13 +56,14 @@ var collectCmd = &cobra.Command{
 		if err != nil {
 			logger.Log.Fatalf("Error connecting to DB: %v", err)
 		}
+		defer db.Close(database)
 		db.Migrate(database)
 
 		var activeProxy string
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager...")
 			// Use EchoURL instead of HealthURL
-			pm := xray.NewManager(database, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
+			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {
@@ -94,42 +94,33 @@ var collectCmd = &cobra.Command{
 				continue
 			}
 
-			savedCount := 0
-			for _, raw := range rawLinks {
-				profile, err := parser.Parse(raw)
-				if err != nil {
-					continue
-				}
+			var batch []model.Proxy
+            
+            for _, raw := range rawLinks {
+                profile, err := parser.Parse(raw)
+                if err != nil {
+                    continue
+                }
 
-				hash := profile.CalculateHash()
+                hash := profile.CalculateHash()
+                
+                batch = append(batch, model.Proxy{
+                    Raw:       raw,
+                    Hash:      hash,
+                    Source:    cCfg.Name,
+                    CreatedAt: time.Now(),
+                    Address:   profile.Address,
+                    Port:      profile.Port,
+                })
+            }
 
-				proxy := model.Proxy{
-					Raw:       raw,
-					Hash:      hash,
-					Source:    cCfg.Name,
-					CreatedAt: time.Now(),
-					Address:   profile.Address,
-					Port:      profile.Port,
-				}
-
-				result := database.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "hash"}},
-					DoNothing: true,
-				}).Create(&proxy)
-				
-				if result.RowsAffected > 0 {
-					savedCount++
-				}
-			}
-			logger.Log.Infof("✅ Collector %s finished. Saved %d new unique proxies.", cCfg.Name, savedCount)
-		}
-
-		// Standard Pruning (Limit = MaxProxies)
-		logger.Log.Info("🧹 Running Standard Database Maintenance...")
-		if err := engine.PruneDatabase(database, cfg, 0); err != nil {
-			logger.Log.Errorf("Pruning failed: %v", err)
-		} else {
-			logger.Log.Info("✨ Database pruned successfully.")
+            // Batch Insert (Chunk size 500)
+            result := database.Clauses(clause.OnConflict{
+                Columns:   []clause.Column{{Name: "hash"}},
+                DoNothing: true,
+            }).CreateInBatches(batch, 500)
+            
+            logger.Log.Infof("✅ Collector %s finished. Processed %d links.", cCfg.Name, result.RowsAffected)
 		}
 	},
 }

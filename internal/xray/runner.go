@@ -24,22 +24,30 @@ func StartEphemeral(link string) (int, *core.Instance, error) {
 	return portsMap[link], instance, nil
 }
 
-// StartMultiEphemeral starts a single Xray instance hosting multiple proxies.
+// StartMultiEphemeral starts a single Xray instance hosting multiple proxies on random free ports.
 func StartMultiEphemeral(links []string) (map[string]int, *core.Instance, error) {
-	// 1. Mute ALL Logs (Stdout/Stderr) for the duration of this function.
-	// This hides Xray's internal deprecation warnings during validation & startup.
-	restoreLogs := muteLogs()
-	defer restoreLogs()
-
 	count := len(links)
 	if count == 0 {
 		return nil, nil, fmt.Errorf("no links provided")
 	}
 
-	// 2. Get Ports
-	ports, err := getFreePorts(count)
+	ports, err := GetFreePorts(count)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	return StartOnPorts(links, ports)
+}
+
+// StartOnPorts starts Xray using a pre-defined set of ports.
+// The length of links must not exceed the length of ports.
+func StartOnPorts(links []string, ports []int) (map[string]int, *core.Instance, error) {
+	// 1. Mute ALL Logs (Stdout/Stderr)
+	restoreLogs := muteLogs()
+	defer restoreLogs()
+
+	if len(links) > len(ports) {
+		return nil, nil, fmt.Errorf("not enough ports provided: have %d, need %d", len(ports), len(links))
 	}
 
 	var inbounds []conf.InboundDetourConfig
@@ -58,8 +66,6 @@ func StartMultiEphemeral(links []string) (map[string]int, *core.Instance, error)
 		}
 
 		// B. XRAY VALIDATION (Dry Run)
-		// This is where the Deprecation Warnings were coming from.
-		// Now that we muted logs at the start of the function, these will be hidden.
 		if _, err := outConfig.Build(); err != nil {
 			continue
 		}
@@ -130,10 +136,7 @@ func muteLogs() func() {
 	origStdout := os.Stdout
 	origStderr := os.Stderr
 
-	// Open /dev/null
 	devNull, _ := os.Open(os.DevNull)
-
-	// If open fails, we just don't mute.
 	if devNull != nil {
 		os.Stdout = devNull
 		os.Stderr = devNull
@@ -148,7 +151,7 @@ func muteLogs() func() {
 	}
 }
 
-func getFreePorts(count int) ([]int, error) {
+func GetFreePorts(count int) ([]int, error) {
 	var listeners []net.Listener
 	var ports []int
 

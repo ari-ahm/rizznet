@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"strings"
-	
+
 	"rizznet/internal/categories"
 	"rizznet/internal/config"
 	"rizznet/internal/environment"
@@ -14,6 +13,7 @@ import (
 	"rizznet/internal/tester"
 	"rizznet/internal/xray"
 
+	"github.com/schollz/progressbar/v3"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -47,7 +47,6 @@ func NewAnnealer(db *gorm.DB, cfg config.Config, env *environment.Env, aliveProx
 	hist := NewHistoryEngine(db)
 	tst := tester.New(cfg.Tester)
 
-	// 1. Setup Categories
 	var catContexts []CategoryContext
 	for i, catCfg := range cfg.Categories {
 		strat, err := categories.Get(catCfg.Strategy)
@@ -63,19 +62,18 @@ func NewAnnealer(db *gorm.DB, cfg config.Config, env *environment.Env, aliveProx
 		})
 	}
 
-	// 2. Score Candidates
 	var candidates []Candidate
 	for _, p := range aliveProxies {
 		priority := CalculateGlobalPriority(p, hist, env.ISP, cfg.Categories)
-		
-		if priority > 0 {
-			var matchingIndices []int
-			for i, ctx := range catContexts {
-				if ctx.Strategy.IsCandidate(p, ctx.Config.Params) {
-					matchingIndices = append(matchingIndices, i)
-				}
-			}
 
+		var matchingIndices []int
+		for i, ctx := range catContexts {
+			if ctx.Strategy.IsCandidate(p, ctx.Config.Params) {
+				matchingIndices = append(matchingIndices, i)
+			}
+		}
+
+		if len(matchingIndices) > 0 {
 			candidates = append(candidates, Candidate{
 				Proxy:              p,
 				PredictedScore:     hist.GetPredictiveScore(p.ID, env.ISP),
@@ -102,19 +100,31 @@ func NewAnnealer(db *gorm.DB, cfg config.Config, env *environment.Env, aliveProx
 }
 
 func (a *Annealer) Run(maxDataMB int) {
-	logger.Log.Infof("🔥 Starting Annealing Process (Budget: %d MB, Candidates: %d)", maxDataMB, len(a.candidates))
+	logger.Log.Infof("🔥 Starting Annealing (Budget: %d MB, Candidates: %d)", maxDataMB, len(a.candidates))
 
 	dataUsed := 0.0
 	limit := float64(maxDataMB)
 	testedProxies := make(map[uint]bool)
 	survivorsCount := 0
 
+	bar := progressbar.NewOptions(1000,
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetWidth(15),
+		progressbar.OptionSetDescription("[yellow]Annealing...[reset]"),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[red]=[reset]",
+			SaucerHead:    "[red]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+	)
+
 	for dataUsed < limit {
 		if len(testedProxies) >= len(a.candidates) {
 			break
 		}
 
-		// Simulated Annealing Temperature Logic
 		temperature := 1.0 - (dataUsed / limit)
 		rangeSize := int(float64(len(a.candidates)) * temperature)
 		if rangeSize < 1 {
@@ -123,7 +133,6 @@ func (a *Annealer) Run(maxDataMB int) {
 			rangeSize = len(a.candidates)
 		}
 
-		// Pick Candidate
 		var candidate *Candidate
 		attemptLimit := 20
 		for k := 0; k < attemptLimit; k++ {
@@ -147,9 +156,13 @@ func (a *Annealer) Run(maxDataMB int) {
 		}
 
 		testedProxies[candidate.Proxy.ID] = true
-		printAnnealerProgress(dataUsed, limit, len(testedProxies), len(a.candidates), survivorsCount, candidate.Proxy.Raw)
 
-		// 1. Start Xray
+		shortLink := candidate.Proxy.Raw
+		if len(shortLink) > 15 {
+			shortLink = shortLink[:12] + "..."
+		}
+		bar.Describe(fmt.Sprintf("[yellow]Found: %d | Testing: %s[reset]", survivorsCount, shortLink))
+
 		port, instance, err := xray.StartEphemeral(candidate.Proxy.Raw)
 		if err != nil {
 			continue
@@ -158,37 +171,29 @@ func (a *Annealer) Run(maxDataMB int) {
 		if a.strictHealthCheck {
 			analyzeClient := a.tester.MakeClient(port, a.testerCfg.HealthTimeout)
 			res, err := a.tester.Analyze(analyzeClient)
-			
+
 			if err != nil {
-				// Failed analysis = Dead
 				instance.Close()
 				a.history.UpdateHistory(candidate.Proxy.ID, a.env.ISP, 0.0, a.env.BaselineSpeed)
 				continue
 			}
 
-			// ROTATION CHECK LOGIC
 			isRotating := candidate.Proxy.IsRotating
-			
 			if !isRotating {
-				// Ensure we have previous data to compare against
 				if candidate.Proxy.ISP != "" && candidate.Proxy.Country != "" {
-					// Compare NEW vs OLD
 					if res.ISP != candidate.Proxy.ISP || res.Country != candidate.Proxy.Country {
 						isRotating = true
-						logger.Log.Debugf("🔄 Detected Rotation for Proxy %d: %s/%s -> %s/%s", 
-							candidate.Proxy.ID, candidate.Proxy.ISP, candidate.Proxy.Country, res.ISP, res.Country)
+						logger.Log.Debugf("🔄 Detected Rotation for Proxy %d", candidate.Proxy.ID)
 					}
 				}
 			}
 
-			// Update Proxy Object
 			candidate.Proxy.IP = res.IP
 			candidate.Proxy.ISP = res.ISP
 			candidate.Proxy.Country = res.Country
 			candidate.Proxy.IsDirty = res.IsDirty
 			candidate.Proxy.IsRotating = isRotating
 
-			// Persist Updates immediately
 			go func(p model.Proxy) {
 				a.db.Clauses(clause.OnConflict{
 					Columns:   []clause.Column{{Name: "id"}},
@@ -197,18 +202,21 @@ func (a *Annealer) Run(maxDataMB int) {
 			}(candidate.Proxy)
 		}
 
-		// 3. Speed Check
 		speedClient := a.tester.MakeClient(port, a.testerCfg.SpeedTimeout)
 		mbps, bytesDownloaded, err := a.tester.SpeedCheck(speedClient)
-		
+
 		instance.Close()
 
 		mbDownloaded := float64(bytesDownloaded) / (1024 * 1024)
 		dataUsed += mbDownloaded
+
 		if err != nil {
 			dataUsed += 0.2
 			mbps = 0
 		}
+
+		currentPercent := (dataUsed / limit) * 1000
+		bar.Set(int(currentPercent))
 
 		a.history.UpdateHistory(candidate.Proxy.ID, a.env.ISP, mbps, a.env.BaselineSpeed)
 
@@ -229,27 +237,11 @@ func (a *Annealer) Run(maxDataMB int) {
 			}
 		}
 	}
+
+	bar.Finish()
 	fmt.Print("\n")
 	logger.Log.Info("🏁 Optimization Finished.")
 	a.saveResults()
-}
-
-func printAnnealerProgress(used, total float64, tested, candidates, survivors int, currentLink string) {
-	percent := int((used / total) * 100)
-	if percent > 100 {
-		percent = 100
-	}
-	barLen := 20
-	filled := int((float64(percent) / 100.0) * float64(barLen))
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barLen-filled)
-
-	shortLink := currentLink
-	if len(shortLink) > 25 {
-		shortLink = shortLink[:22] + "..."
-	}
-
-	fmt.Printf("\r🔥 Annealing: [%s] %d%% | Budget: %.1f/%.0fMB | Tested: %d/%d | Survivors: %d | Now: %s    ",
-		bar, percent, used, total, tested, candidates, survivors, shortLink)
 }
 
 func (a *Annealer) saveResults() {

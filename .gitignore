@@ -10,6 +10,7 @@
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
 # Ignore the specific db name defined in code
 rizznet.db
 

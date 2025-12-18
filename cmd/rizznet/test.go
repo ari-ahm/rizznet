@@ -2,9 +2,7 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"sync"
-	"sync/atomic"
 
 	_ "rizznet/internal/categories/strategies"
 
@@ -18,6 +16,7 @@ import (
 	"rizznet/internal/tester"
 	"rizznet/internal/xray"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -42,7 +41,7 @@ var testCmd = &cobra.Command{
 		}
 
 		if err := geoip.Init(cfg.Tester.GeoIPASNPath, cfg.Tester.GeoIPCountryPath); err != nil {
-				logger.Log.Fatalf("Failed to init GeoIP: %v", err)
+			logger.Log.Fatalf("Failed to init GeoIP: %v", err)
 		}
 		defer geoip.Close()
 
@@ -61,6 +60,7 @@ var testCmd = &cobra.Command{
 		if err != nil {
 			logger.Log.Fatalf("Error connecting to DB: %v", err)
 		}
+		defer db.Close(database)
 		db.Migrate(database)
 
 		env, err := environment.Detect(cfg.Tester)
@@ -72,13 +72,11 @@ var testCmd = &cobra.Command{
 		logger.Log.Info("🔍 Selecting candidates for testing...")
 		query := database.Model(&model.Proxy{})
 
-		// Flag: Only Categorized
 		if flagOnlyCategorized {
 			query = query.Where("id IN (?)", database.Table("proxy_categories").Select("proxy_id"))
 			logger.Log.Info("   -> Filter: Only proxies already in a category")
 		}
 
-		// Flag: Top K
 		if flagTopK > 0 {
 			query = query.Select("proxies.*").
 				Joins("LEFT JOIN proxy_performances pp ON pp.proxy_id = proxies.id AND pp.user_isp = ?", env.ISP).
@@ -122,17 +120,7 @@ var testCmd = &cobra.Command{
 
 		annealer.Run(cfg.Tester.AnnealBudgetMB)
 
-		// --- 4. Pruning ---
-		if !flagFast {
-			aggressiveLimit := int(float64(cfg.Database.MaxProxies) * 0.7)
-			logger.Log.Infof("🧹 Running Aggressive Post-Test Pruning (Target: %d)...", aggressiveLimit)
-			
-			if err := engine.PruneDatabase(database, cfg, aggressiveLimit); err != nil {
-				logger.Log.Errorf("Aggressive pruning failed: %v", err)
-			} else {
-				logger.Log.Info("✨ Aggressive pruning complete.")
-			}
-		}
+		logger.Log.Info("✅ Testing and optimization complete.")
 	},
 }
 
@@ -153,11 +141,30 @@ func runHealthCheckLayer(
 		return []model.Proxy{}
 	}
 
-	logger.Log.Infof("🔎 Running Batch Health Check & Analysis (Batch Size: %d, Total: %d)...", batchSize, totalCount)
+	logger.Log.Infof("🔎 Running Health Check on %d proxies...", totalCount)
+
+	poolPorts, err := xray.GetFreePorts(batchSize)
+	if err != nil {
+		logger.Log.Fatalf("Failed to allocate port pool: %v", err)
+	}
+	logger.Log.Debugf("Allocated port pool: %v", poolPorts)
+
+	bar := progressbar.NewOptions(totalCount,
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionShowBytes(false),
+		progressbar.OptionSetWidth(15),
+		progressbar.OptionSetDescription("[cyan]Checking...[reset]"),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+	)
 
 	var survivors []model.Proxy
 	var survivorsLock sync.Mutex
-	var processedCount int32
 
 	t := tester.New(testCfg)
 
@@ -173,10 +180,12 @@ func runHealthCheckLayer(
 			links = append(links, p.Raw)
 		}
 
-		portMap, instance, err := xray.StartMultiEphemeral(links)
+		currentPorts := poolPorts[:len(batch)]
+
+		portMap, instance, err := xray.StartOnPorts(links, currentPorts)
 		if err != nil {
-			logger.Log.Warnf("Batch failed Xray start: %v. Skipping %d proxies.", err, len(batch))
-			atomic.AddInt32(&processedCount, int32(len(batch)))
+			logger.Log.Warnf("Batch failed Xray start: %v", err)
+			bar.Add(len(batch))
 			continue
 		}
 
@@ -185,18 +194,18 @@ func runHealthCheckLayer(
 		for _, p := range batch {
 			port, ok := portMap[p.Raw]
 			if !ok {
-				atomic.AddInt32(&processedCount, 1)
+				bar.Add(1)
 				continue
 			}
 
 			wg.Add(1)
 			go func(proxy model.Proxy, localPort int) {
 				defer wg.Done()
-				
-				analyzeClient := t.MakeClient(localPort, testCfg.HealthTimeout)
+				defer bar.Add(1)
 
+				analyzeClient := t.MakeClient(localPort, testCfg.HealthTimeout)
 				res, err := t.Analyze(analyzeClient)
-				
+
 				if err != nil {
 					hist.UpdateHistory(proxy.ID, env.ISP, 0.0, env.BaselineSpeed)
 				} else {
@@ -204,8 +213,7 @@ func runHealthCheckLayer(
 					proxy.ISP = res.ISP
 					proxy.Country = res.Country
 					proxy.IsDirty = res.IsDirty
-					
-					// Rotation check
+
 					if !proxy.IsRotating && proxy.ISP != "" && (proxy.ISP != res.ISP || proxy.Country != res.Country) {
 						proxy.IsRotating = true
 					}
@@ -228,39 +236,28 @@ func runHealthCheckLayer(
 
 					survivorsLock.Lock()
 					survivors = append(survivors, proxy)
+					bar.Describe(fmt.Sprintf("[cyan]Alive: %d[reset]", len(survivors)))
 					survivorsLock.Unlock()
 				}
-
-				curr := atomic.AddInt32(&processedCount, 1)
-				printHealthProgress(int(curr), totalCount, len(survivors))
-
 			}(p, port)
 		}
 		wg.Wait()
 		instance.Close()
 	}
-	fmt.Print("\n") 
+
+	bar.Finish()
+	fmt.Print("\n")
 	logger.Log.Infof("✅ Health Check Complete. Survivors: %d/%d", len(survivors), totalCount)
 	return survivors
-}
-
-func printHealthProgress(curr, total, survivors int) {
-	percent := (curr * 100) / total
-	barLen := 20
-	filled := (percent * barLen) / 100
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", barLen-filled)
-
-	fmt.Printf("\r🔎 Health: [%s] %d%% | %d/%d Checked | Alive: %d    ",
-		bar, percent, curr, total, survivors)
 }
 
 func init() {
 	testCmd.Flags().IntVar(&flagWorkers, "workers", 0, "Override worker count")
 	testCmd.Flags().IntVar(&flagBudget, "budget", 0, "Override data budget (MB)")
 	testCmd.Flags().BoolVar(&flagFast, "fast", false, "Skip initial health check")
-	
+
 	testCmd.Flags().BoolVar(&flagOnlyCategorized, "only-categorized", false, "Only test proxies that are already in a category")
 	testCmd.Flags().IntVar(&flagTopK, "top-k", 0, "Only test the top K proxies based on historical score")
-	
+
 	rootCmd.AddCommand(testCmd)
 }
