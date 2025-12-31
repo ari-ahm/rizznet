@@ -13,7 +13,7 @@ import (
 
 // PruneDatabase checks if the DB size exceeds the target limit and removes the lowest-scoring proxies.
 // If customLimit is 0, it uses cfg.Database.MaxProxies.
-func PruneDatabase(db *gorm.DB, cfg *config.Config, customLimit int) error {
+func PruneDatabase(db *gorm.DB, cfg *config.Config, customLimit int, skipEnvDetect bool) error {
 	limit := customLimit
 	if limit <= 0 {
 		limit = cfg.Database.MaxProxies
@@ -33,10 +33,18 @@ func PruneDatabase(db *gorm.DB, cfg *config.Config, customLimit int) error {
 	logger.Log.Infof("✂️  Pruning Database: Count %d > Limit %d. Removing %d proxies...", count, limit, excess)
 
 	// 1. Detect Environment (Needed for scoring)
-	env, err := environment.Detect(cfg.Tester)
-	if err != nil {
-		logger.Log.Warn("Env detection failed during prune, assuming default.")
+	var env *environment.Env
+	var err error
+
+	if skipEnvDetect {
+		logger.Log.Info("   -> Skipping Environment Detection (Using ISP: Unknown)")
 		env = &environment.Env{ISP: "Unknown"}
+	} else {
+		env, err = environment.Detect(cfg.Tester, false)
+		if err != nil {
+			logger.Log.Warn("Env detection failed during prune, assuming default.")
+			env = &environment.Env{ISP: "Unknown"}
+		}
 	}
 
 	hist := NewHistoryEngine(db)

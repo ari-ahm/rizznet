@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var noEnvDetect bool
+
 var pruneCmd = &cobra.Command{
 	Use:   "prune [limit]",
 	Short: "Shrink the database to a specific size",
@@ -46,8 +48,7 @@ ISP history and category weights, then deletes the worst performers.`,
 		defer db.Close(database)
 
 		// 4. Run Pruner
-		// Passing 0 causes engine.PruneDatabase to fallback to cfg.Database.MaxProxies
-		if err := engine.PruneDatabase(database, cfg, targetLimit); err != nil {
+		if err := engine.PruneDatabase(database, cfg, targetLimit, noEnvDetect); err != nil {
 			logger.Log.Errorf("Pruning failed: %v", err)
 		} else {
 			logger.Log.Info("✅ Database maintenance complete.")
@@ -56,5 +57,6 @@ ISP history and category weights, then deletes the worst performers.`,
 }
 
 func init() {
+	pruneCmd.Flags().BoolVar(&noEnvDetect, "no-env", false, "Disable environment detection entirely (assumes 'Unknown' ISP)")
 	rootCmd.AddCommand(pruneCmd)
 }

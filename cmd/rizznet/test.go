@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sync"
 
 	_ "rizznet/internal/categories/strategies"
@@ -63,7 +64,7 @@ var testCmd = &cobra.Command{
 		defer db.Close(database)
 		db.Migrate(database)
 
-		env, err := environment.Detect(cfg.Tester)
+		env, err := environment.Detect(cfg.Tester, true)
 		if err != nil {
 			logger.Log.Fatalf("Environment check failed: %v", err)
 		}
@@ -154,6 +155,7 @@ func runHealthCheckLayer(
 		progressbar.OptionShowBytes(false),
 		progressbar.OptionSetWidth(15),
 		progressbar.OptionSetDescription("[cyan]Checking...[reset]"),
+		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionSetTheme(progressbar.Theme{
 			Saucer:        "[green]=[reset]",
 			SaucerHead:    "[green]>[reset]",

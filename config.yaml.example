@@ -1,47 +1,87 @@
 database:
   path: "rizznet.db"
-  max_proxies: 10000 # Auto-prune if DB exceeds this size
+  max_proxies: 20000
 
 system_proxy:
   enabled: true
-  fallback: "socks5://127.0.0.1:10808" # Used to scrape blocked sources (Telegram)
+  fallback: "socks5://127.0.0.1:10808"
 
 tester:
-  health_timeout: 8s
-  speed_timeout: 45s
-  worker_count: 50
-  anneal_budget_mb: 500 # Stop testing after using this much traffic
+  health_timeout: 8s      # Fast check
+  speed_timeout: 15s      # Slow check for big downloads
+  anneal_budget_mb: 500
+  worker_count: 500
+
+  # Echo URL that returns IP in plain text
+  echo_url: "http://api.ipify.org"
+  
+  dirty_check_url: "https://developers.google.com"
+  
+  speed_test_url: "https://speed.cloudflare.com/__down?bytes=5000000"
 
 collectors:
-  - name: "telegram_channels"
-    type: "telegram"
+  - name: "http"
+    type: "http"
     params:
-      api_id: 123456        # Get from my.telegram.org
-      api_hash: "abcdef..." 
-      limit: 1000
-      chats:
-        - -100123456789
+      url: "https://raw.githubusercontent.com/ari-ahm/rizznet/refs/heads/main/sub"
+  - name: "http"
+    type: "http"
+    params:
+      url: "https://raw.githubusercontent.com/AzadNetCH/Clash/refs/heads/main/AzadNet.txt"
+  - name: "http"
+    type: "http"
+    params:
+      url: "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/All_Configs_Sub.txt"
+
+  # Telegram Collector (Requires Credentials)
+  # - name: "tg"
+  #   type: "telegram"
+  #   params:
+  #     api_id: 123456        # REPLACE ME
+  #     api_hash: "REPLACE_ME"
+  #     limit: 100
+  #     chats:
+  #       - -1001878264271
+  #       - -1001847556009
+  #       - -1001629460620
+  #       - -1001704865375
+  #       - -1001698158989
 
 categories:
   - name: "speed"
     strategy: "standard"
     weight: 10
-    bucket_size: 20
+    bucket_size: 10
+    params: {}
 
-  - name: "clean_ip"
+  - name: "clean"
     strategy: "standard"
-    weight: 8
-    bucket_size: 20
+    weight: 10
+    bucket_size: 10
     params:
       require_clean: true
 
-publishers:
-  - name: "github_backup"
-    type: "github"
-    categories: [] # Publish all
+  - name: "fastly"
+    strategy: "standard"
+    weight: 2
+    bucket_size: 3
     params:
-      token: "ghp_yourtoken..."
-      owner: "youruser"
-      repo: "proxies"
-      path: "sub.txt"
-      base64: true
+      entry_isp: "Fastly"
+
+publishers:
+  - name: "stdout"
+    type: "stdout"
+    categories: []
+    params: {}
+  
+  # Github Publisher
+  # - name: "repo"
+  #   type: "github"
+  #   categories: []
+  #   params:
+  #     token: "ghp_REPLACE_ME"
+  #     owner: "REPLACE_ME"
+  #     repo: "rizznet"
+  #     path: "sub"
+  #     base64: false
+  #     message: "yay i'm still alive"

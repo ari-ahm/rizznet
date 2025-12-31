@@ -11,7 +11,7 @@ var Log *zap.SugaredLogger
 
 // Init initializes the global logger.
 // If logPath is provided, logs are written to that file (overwriting it).
-// Otherwise, they are written to stdout.
+// Otherwise, they are written to stderr (to keep stdout clean for piping).
 func Init(verbose bool, logPath string) {
 	encoderConfig := zap.NewDevelopmentEncoderConfig()
 	encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
@@ -34,13 +34,14 @@ func Init(verbose bool, logPath string) {
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
 			// Fallback if file creation fails
-			writer = zapcore.AddSync(os.Stdout)
+			writer = zapcore.AddSync(os.Stderr)
 			println("Failed to create log file: " + err.Error())
 		} else {
 			writer = zapcore.AddSync(f)
 		}
 	} else {
-		writer = zapcore.AddSync(os.Stdout)
+		// CHANGED: Use Stderr instead of Stdout to keep stdout clean for data piping
+		writer = zapcore.AddSync(os.Stderr)
 	}
 
 	core := zapcore.NewCore(
