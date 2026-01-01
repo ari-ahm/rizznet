@@ -7,6 +7,8 @@ before:
 
 builds:
   - id: unix
+    env:
+      - CGO_ENABLED=0
     main: ./cmd/rizznet
     goos:
       - linux
@@ -16,6 +18,8 @@ builds:
       - arm64
 
   - id: windows
+    env:
+      - CGO_ENABLED=0
     main: ./cmd/rizznet
     goos:
       - windows
