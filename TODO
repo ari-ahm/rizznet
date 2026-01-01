@@ -1,1 +1,3 @@
 make categories be able to do tests on the link(by connecting to it) like to add a new redirect test for aistudio
+add categories list(for the next feature) and be able to add/remove links from a category
+add proxy runner mode(takes in the id from categories list to know which proxy to run)

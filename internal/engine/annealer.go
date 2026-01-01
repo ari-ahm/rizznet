@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"math/rand"
+	"os"
 	"sort"
 
 	"rizznet/internal/categories"
@@ -111,6 +112,7 @@ func (a *Annealer) Run(maxDataMB int) {
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionSetWidth(15),
 		progressbar.OptionSetDescription("[yellow]Annealing...[reset]"),
+		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionSetTheme(progressbar.Theme{
 			Saucer:        "[red]=[reset]",
 			SaucerHead:    "[red]>[reset]",

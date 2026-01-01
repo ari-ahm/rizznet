@@ -1,0 +1,50 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: unix
+    main: ./cmd/rizznet
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+  - id: windows
+    main: ./cmd/rizznet
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: nix
+    ids:
+      - unix
+    formats:
+      - tar.gz
+
+  - id: windows
+    ids:
+      - windows
+    formats:
+      - zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'

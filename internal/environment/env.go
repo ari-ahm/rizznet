@@ -13,7 +13,7 @@ type Env struct {
 	BaselineSpeed float64
 }
 
-func Detect(cfg config.TesterConfig) (*Env, error) {
+func Detect(cfg config.TesterConfig, performSpeedTest bool) (*Env, error) {
 	logger.Log.Info("🌍 Detecting Environment...")
 
 	t := tester.New(cfg)
@@ -25,15 +25,22 @@ func Detect(cfg config.TesterConfig) (*Env, error) {
 	}
 	logger.Log.Infof("   -> Current ISP: %s (%s) [IP: %s]", meta.ISP, meta.Country, meta.IP)
 
-	fmt.Print("   -> Measuring Baseline Speed... ") 
-	directClientSpeed := &http.Client{Timeout: cfg.SpeedTimeout}
+	speed := 0.0
+	
+	if performSpeedTest {
+		logger.Log.Info("   -> Measuring Baseline Speed...") 
+		directClientSpeed := &http.Client{Timeout: cfg.SpeedTimeout}
 
-	speed, _, err := t.SpeedCheck(directClientSpeed)
-	if err != nil {
-		fmt.Println("Failed!")
-		return nil, fmt.Errorf("failed to measure baseline speed: %w", err)
+		s, _, err := t.SpeedCheck(directClientSpeed)
+		if err != nil {
+			logger.Log.Warn("   -> Baseline Speed Test Failed!")
+			return nil, fmt.Errorf("failed to measure baseline speed: %w", err)
+		}
+		speed = s
+		logger.Log.Infof("   -> Baseline Speed: %.2f Mbps", speed)
+	} else {
+		logger.Log.Info("   -> Skipped Baseline Speed Test.")
 	}
-	fmt.Printf("%.2f Mbps\n", speed)
 
 	return &Env{
 		ISP:           meta.ISP,

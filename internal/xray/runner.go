@@ -41,10 +41,19 @@ func StartMultiEphemeral(links []string) (map[string]int, *core.Instance, error)
 
 // StartOnPorts starts Xray using a pre-defined set of ports.
 // The length of links must not exceed the length of ports.
-func StartOnPorts(links []string, ports []int) (map[string]int, *core.Instance, error) {
-	// 1. Mute ALL Logs (Stdout/Stderr)
-	restoreLogs := muteLogs()
-	defer restoreLogs()
+func StartOnPorts(links []string, ports []int) (portMap map[string]int, instance *core.Instance, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Log.Errorf("CRITICAL: Xray Core Panic recovered: %v", r)
+			err = fmt.Errorf("xray core panic: %v", r)
+			if instance != nil {
+				instance.Close()
+				instance = nil
+			}
+		}
+	}()
+
+	// CHANGED: Removed muteLogs() to ensure runtime visibility for debugging
 
 	if len(links) > len(ports) {
 		return nil, nil, fmt.Errorf("not enough ports provided: have %d, need %d", len(ports), len(links))
@@ -65,8 +74,14 @@ func StartOnPorts(links []string, ports []int) (map[string]int, *core.Instance, 
 			continue
 		}
 
-		// B. XRAY VALIDATION (Dry Run)
-		if _, err := outConfig.Build(); err != nil {
+		var buildErr error
+		func() {
+			restore := muteLogs()
+			defer restore()
+			_, buildErr = outConfig.Build()
+		}()
+
+		if buildErr != nil {
 			continue
 		}
 
@@ -107,7 +122,12 @@ func StartOnPorts(links []string, ports []int) (map[string]int, *core.Instance, 
 
 	// 3. Build & Start
 	pbConfig, err := (&conf.Config{
-		LogConfig:       &conf.LogConfig{LogLevel: "none"},
+		LogConfig: &conf.LogConfig{
+			LogLevel:      "none",
+			AccessLog:     "none",
+			ErrorLog:      "none",
+			DNSLog:        false,
+		},
 		InboundConfigs:  inbounds,
 		OutboundConfigs: outbounds,
 		RouterConfig: &conf.RouterConfig{
@@ -119,7 +139,7 @@ func StartOnPorts(links []string, ports []int) (map[string]int, *core.Instance, 
 		return nil, nil, err
 	}
 
-	instance, err := core.New(pbConfig)
+	instance, err = core.New(pbConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -129,26 +149,6 @@ func StartOnPorts(links []string, ports []int) (map[string]int, *core.Instance, 
 	}
 
 	return linkToPort, instance, nil
-}
-
-// muteLogs redirects stdout and stderr to /dev/null and returns a function to restore them.
-func muteLogs() func() {
-	origStdout := os.Stdout
-	origStderr := os.Stderr
-
-	devNull, _ := os.Open(os.DevNull)
-	if devNull != nil {
-		os.Stdout = devNull
-		os.Stderr = devNull
-	}
-
-	return func() {
-		if devNull != nil {
-			devNull.Close()
-		}
-		os.Stdout = origStdout
-		os.Stderr = origStderr
-	}
 }
 
 func GetFreePorts(count int) ([]int, error) {
@@ -178,4 +178,23 @@ func toAddress(s string) *conf.Address {
 	var addr conf.Address
 	_ = json.Unmarshal([]byte(fmt.Sprintf("%q", s)), &addr)
 	return &addr
+}
+
+func muteLogs() func() {
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+
+	devNull, _ := os.Open(os.DevNull)
+	if devNull != nil {
+		os.Stdout = devNull
+		os.Stderr = devNull
+	}
+
+	return func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+		if devNull != nil {
+			devNull.Close()
+		}
+	}
 }
