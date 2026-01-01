@@ -11,7 +11,7 @@ all: build
 # Build the binary
 build: deps
 	@echo "Building $(BINARY_NAME)..."
-	go build -o $(BINARY_NAME) $(MAIN_PACKAGE)
+	CGO_ENABLED=0 go build -o $(BINARY_NAME) $(MAIN_PACKAGE)
 	@echo "Build complete."
 
 # Run the binary (prints help by default)

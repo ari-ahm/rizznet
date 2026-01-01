@@ -5,7 +5,7 @@ import (
 	"rizznet/internal/model"
 	"rizznet/internal/logger"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	gormlog "gorm.io/gorm/logger"
 )
