@@ -39,9 +39,6 @@ type TesterConfig struct {
 
 	DirtyCheckURL string `yaml:"dirty_check_url"`
 	SpeedTestURL  string `yaml:"speed_test_url"`
-	
-	// Minimum bytes required to consider a speed test valid if connection cuts/times out
-	MinDownloadSize int64 `yaml:"min_download_size"`
 
 	WorkerCount    int `yaml:"worker_count"`
 	AnnealBudgetMB int `yaml:"anneal_budget_mb"`
@@ -89,7 +86,6 @@ func Load(path string) (*Config, error) {
 	cfg.Tester.SpeedTestURL = "https://speed.cloudflare.com/__down?bytes=5000000"
 	cfg.Tester.WorkerCount = 50
 	cfg.Tester.AnnealBudgetMB = 500
-	cfg.Tester.MinDownloadSize = 1000000 // Default 1MB
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config yaml: %w", err)
@@ -103,10 +99,6 @@ func Load(path string) (*Config, error) {
 		if cfg.Categories[i].Weight <= 0 {
 			cfg.Categories[i].Weight = 1
 		}
-	}
-
-	if cfg.Tester.MinDownloadSize < 0 {
-		cfg.Tester.MinDownloadSize = 500000 // Fallback safety
 	}
 
 	return &cfg, nil
