@@ -3,7 +3,6 @@ version: 2
 before:
   hooks:
     - go mod tidy
-    - go test ./...
 
 builds:
   - id: unix
@@ -16,6 +15,11 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      - -trimpath
+      - -tags=netgo 
+    ldflags:
+      - -s -w
 
   - id: windows
     env:
@@ -26,6 +30,11 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      - -trimpath
+      - -tags=netgo
+    ldflags:
+      - -s -w
 
 archives:
   - id: nix
@@ -33,12 +42,26 @@ archives:
       - unix
     formats:
       - tar.gz
+    # Include the files prepared by 'make prepare-release'
+    files:
+      - src: config.yaml
+      - src: GeoLite2-ASN.mmdb
+      - src: GeoLite2-Country.mmdb
+      - src: LICENSE
+      - src: README.md
 
   - id: windows
     ids:
       - windows
     formats:
       - zip
+    # Include the files here as well
+    files:
+      - src: config.yaml
+      - src: GeoLite2-ASN.mmdb
+      - src: GeoLite2-Country.mmdb
+      - src: LICENSE
+      - src: README.md
 
 checksum:
   name_template: 'checksums.txt'

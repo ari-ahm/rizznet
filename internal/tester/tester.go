@@ -124,13 +124,8 @@ func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
 
 	duration := time.Since(start)
 
-	// Logic: If we hit an error (timeout, connection reset) BUT we downloaded
-	// enough data (MinDownloadSize), we consider it a valid test result.
-	if readErr != nil {
-		if written < t.cfg.MinDownloadSize {
-			return 0, written, fmt.Errorf("download failed (only %d bytes): %w", written, readErr)
-		}
-		// If written >= MinDownloadSize, we proceed to calculate speed despite the error
+	if readErr != nil && written == 0 {
+		return 0, written, fmt.Errorf("download failed (0 bytes): %w", readErr)
 	}
 
 	if duration.Seconds() == 0 {

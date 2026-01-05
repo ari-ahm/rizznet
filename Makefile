@@ -47,14 +47,19 @@ update-geoip:
 	wget -N https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb
 	wget -N https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-Country.mmdb
 
+prepare-release: update-geoip
+	@echo "Preparing release files..."
+	cp config.yaml.example config.yaml
+
 # Help command to list available targets
 help:
 	@echo "Makefile for $(BINARY_NAME)"
 	@echo "Usage:"
-	@echo "  make build					- Compile the binary"
-	@echo "  make run						- Compile and run the binary"
-	@echo "  make clean					- Remove binary and rizznet.db"
-	@echo "  make deps					- Update go.mod and download dependencies"
-	@echo "  make fmt						- Format Go source files"
-	@echo "  make vet						- Run static analysis"
-	@echo "  make update-geoip	- Update GeoIP Databases"
+	@echo "  make build						- Compile the binary"
+	@echo "  make run							- Compile and run the binary"
+	@echo "  make clean						- Remove binary and rizznet.db"
+	@echo "  make deps						- Update go.mod and download dependencies"
+	@echo "  make fmt							- Format Go source files"
+	@echo "  make vet							- Run static analysis"
+	@echo "  make update-geoip		- Update GeoIP Databases"
+	@echo "  make prepare-release	- Prepare for release"

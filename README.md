@@ -16,31 +16,74 @@ Unlike simple scrapers, Rizznet uses **Simulated Annealing** and a **History Eng
 *   **Xray-Core Integration:** Uses the official Xray core as a library for accurate, real-world connection testing.
 *   **Flexible Publishing:** Exports subscriptions to Stdout or commits directly to a **GitHub Repository**.
 
-## 🛠️ Installation
+## ⚡ Bootstrapping (Quick Start)
+
+If you have just downloaded a release, follow this guide to populate your database for the first time.
+
+**1. Download & Extract**
+Download the latest release for your OS. The archive already includes the `config.yaml` and necessary GeoIP databases. You do **not** need to rename files or download anything else.
+
+**2. First Collection**
+You face a "chicken-and-egg" problem: you need proxies to scrape safely, but you don't have any yet.
+Run the collector bypassing the internal proxy system:
+
+```bash
+./rizznet collect --no-proxy
+```
+
+*Note: If this fails (e.g., your ISP blocks the source URLs), start your own local proxy (like v2rayN/NekoBox) on the port defined in `config.yaml` (default: `10808`) and run the command again without the flag:*
+```bash
+# Only if --no-proxy failed and you have a local proxy running on port 10808
+./rizznet collect
+```
+
+**3. Test & Optimize**
+Run the engine to find working proxies. This will ping candidates and run speed tests.
+
+```bash
+./rizznet test
+```
+
+**4. Publish**
+Output the results to your terminal (or other configured publishers).
+
+```bash
+./rizznet publish
+```
+
+*After this baseline setup, you can edit `config.yaml` to add Telegram API credentials, GitHub tokens, or change the logic.*
+
+## 🛠️ Installation (From Source)
+
+If you prefer to build from source instead of using the pre-compiled releases:
 
 **Prerequisites:**
 *   Go 1.25+
 *   Make
-*   SQLite3 (Optional, for manual DB queries)
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/rizznet.git
+git clone https://github.com/ari-ahm/rizznet.git
 cd rizznet
 
-# Build the binary
+# Build the binary and download GeoIP data
 make build
+make update-geoip
+
+# Create config
+cp config.yaml.example config.yaml
 ```
 
 ## ⚙️ Configuration
 
-Rizznet requires a YAML configuration file to define collectors, test parameters, and publishing targets.
+Rizznet relies on `config.yaml`.
+*   **Releases:** This file is included and pre-configured with defaults.
+*   **Manual Build:** Copy `config.yaml.example` to `config.yaml`.
 
-1.  Copy the example configuration:
-    ```bash
-    cp config.example.yaml config.yaml
-    ```
-2.  Edit `config.yaml` to add your Telegram credentials, GitHub tokens, and desired categories.
+Key settings to look at:
+*   `system_proxy.fallback`: The local proxy port Rizznet uses if it can't find a working proxy in its own DB (Default: `10808`).
+*   `collectors`: Add your Telegram API ID/Hash here to enable the Telegram scraper.
+*   `publishers`: Add your GitHub Token here to auto-commit subscriptions.
 
 ## 🖥️ Usage
 
