@@ -7,8 +7,13 @@ system_proxy:
   fallback: "socks5://127.0.0.1:10808"
 
 tester:
-  health_timeout: 8s      # Fast check
-  speed_timeout: 15s      # Slow check for big downloads
+  health_timeout: 10s      # Time limit for TCP connect & TTFB (First Byte)
+  speed_timeout: 30s       # Time limit for the full download speed test
+  
+  # Number of retries for network operations (DNS, Connect, Speedtest)
+  # 1 retry = 2 total attempts.
+  retries: 1
+  
   anneal_budget_mb: 500
   worker_count: 500
 
@@ -85,3 +90,15 @@ publishers:
   #     path: "sub"
   #     base64: false
   #     message: "yay i'm still alive"
+
+  # Gitea / Self-Hosted Example
+  # - name: "my_gitea"
+  #   type: "github"
+  #   categories: []
+  #   params:
+  #     api_url: "https://git.example.com/api/v1"  # Base API URL
+  #     token: "gitea_access_token"
+  #     owner: "my_user"
+  #     repo: "my_repo"
+  #     path: "sub.txt"
+  #     message: "update from rizznet"

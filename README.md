@@ -12,9 +12,11 @@ Unlike simple scrapers, Rizznet uses **Simulated Annealing** and a **History Eng
 *   **Optimization Engine:**
     *   **History Tracking:** Remembers proxy performance and penalizes dead nodes.
     *   **Simulated Annealing:** Finds the optimal set of proxies for specific categories (Speed, Clean IP, Specific ISP) without wasting bandwidth.
-    *   **Data Budget:** Strict controls on how much data the tester consumes (e.g., "Use max 50MB for testing").
-*   **Xray-Core Integration:** Uses the official Xray core as a library for accurate, real-world connection testing.
-*   **Flexible Publishing:** Exports subscriptions to Stdout or commits directly to a **GitHub Repository**.
+    *   **Robust Networking:** Configurable retries and strict timeouts to handle unstable network environments.
+    *   **Xray-Core Integration:** Uses the official Xray core as a library for accurate, real-world connection testing.
+*   **Flexible Publishing:** 
+    *   Exports to **Stdout** (Pipe to file).
+    *   Commits directly to **GitHub** or **Gitea/Forgejo** (Self-hosted).
 
 ## ⚡ Bootstrapping (Quick Start)
 
@@ -82,8 +84,24 @@ Rizznet relies on `config.yaml`.
 
 Key settings to look at:
 *   `system_proxy.fallback`: The local proxy port Rizznet uses if it can't find a working proxy in its own DB (Default: `10808`).
+*   `tester.retries`: How many times to retry failed network operations (DNS/Connect/Speed). Default `2`.
 *   `collectors`: Add your Telegram API ID/Hash here to enable the Telegram scraper.
-*   `publishers`: Add your GitHub Token here to auto-commit subscriptions.
+*   `publishers`: Add your Git Token here to auto-commit subscriptions.
+
+### Self-Hosted Git (Gitea/Forgejo)
+To publish to a private Gitea instance, simply add the `api_url` parameter to the publisher config:
+
+```yaml
+publishers:
+  - name: "my_gitea"
+    type: "github"
+    params:
+      api_url: "https://git.yourdomain.com/api/v1"
+      token: "your_token"
+      owner: "user"
+      repo: "repo"
+      path: "sub.txt"
+```
 
 ## 🖥️ Usage
 

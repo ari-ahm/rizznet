@@ -40,6 +40,9 @@ var publishCmd = &cobra.Command{
 			if cfg.Publishers[i].Params == nil {
 				cfg.Publishers[i].Params = make(map[string]interface{})
 			}
+			// INJECT: Speed Timeout for Publishers
+			cfg.Publishers[i].Params["_timeout"] = cfg.Tester.SpeedTimeout
+
 			for k, v := range publishParams {
 				if intVal, err := strconv.Atoi(v); err == nil {
 					cfg.Publishers[i].Params[k] = intVal
@@ -60,7 +63,8 @@ var publishCmd = &cobra.Command{
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager for publishing...")
 			// Use EchoURL instead of HealthURL
-			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
+			// INJECT: Health Timeout for Manager (Bootstrap) & Retries
+			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL, cfg.Tester.HealthTimeout, cfg.Tester.Retries)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {

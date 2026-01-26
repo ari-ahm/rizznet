@@ -76,6 +76,9 @@ var collectCmd = &cobra.Command{
 			if cfg.Collectors[i].Params == nil {
 				cfg.Collectors[i].Params = make(map[string]interface{})
 			}
+			// INJECT: Speed Timeout for Collectors
+			cfg.Collectors[i].Params["_timeout"] = cfg.Tester.SpeedTimeout
+
 			for k, v := range collectParams {
 				if intVal, err := strconv.Atoi(v); err == nil {
 					cfg.Collectors[i].Params[k] = intVal
@@ -89,7 +92,8 @@ var collectCmd = &cobra.Command{
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager...")
 			// Use EchoURL instead of HealthURL for proxy checks
-			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL)
+			// INJECT: Health Timeout for Manager (Bootstrap) & Retries
+			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL, cfg.Tester.HealthTimeout, cfg.Tester.Retries)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {

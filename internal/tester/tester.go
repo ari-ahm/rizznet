@@ -30,6 +30,24 @@ func New(cfg config.TesterConfig) *Tester {
 }
 
 func (t *Tester) Analyze(client *http.Client) (*AnalysisResult, error) {
+	var lastErr error
+	
+	// Retry Loop
+	for i := 0; i <= t.cfg.Retries; i++ {
+		res, err := t.doAnalyze(client)
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		// Brief backoff
+		if i < t.cfg.Retries {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	return nil, lastErr
+}
+
+func (t *Tester) doAnalyze(client *http.Client) (*AnalysisResult, error) {
 	resp, err := client.Get(t.cfg.EchoURL)
 	if err != nil {
 		return nil, err
@@ -89,6 +107,30 @@ func (t *Tester) AnalyzeFromLink(link string) (*AnalysisResult, error) {
 }
 
 func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
+	var mbps float64
+	var written int64
+	var lastErr error
+
+	// Retry Loop
+	for i := 0; i <= t.cfg.Retries; i++ {
+		m, w, err := t.doSpeedCheck(client)
+		if err == nil {
+			return m, w, nil
+		}
+		lastErr = err
+		// Keep best effort data count
+		if w > written {
+			written = w 
+		}
+		
+		if i < t.cfg.Retries {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	return mbps, written, lastErr
+}
+
+func (t *Tester) doSpeedCheck(client *http.Client) (float64, int64, error) {
 	req, _ := http.NewRequest("GET", t.cfg.SpeedTestURL, nil)
 
 	// Note: We do NOT start the timer here. We exclude TTFB.
@@ -147,17 +189,23 @@ func (t *Tester) SpeedCheckFromLink(link string) (float64, int64, error) {
 	return t.SpeedCheck(t.MakeClient(port, t.cfg.SpeedTimeout))
 }
 
-func (t *Tester) MakeClient(port int, timeout time.Duration) *http.Client {
+func (t *Tester) MakeClient(port int, totalTimeout time.Duration) *http.Client {
 	proxyURL, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", port))
+	
+	// Requirement: Connection and Headers must happen within HealthTimeout
+	// even if the total operation (like SpeedTest) is allowed to take longer.
+	connectTimeout := t.cfg.HealthTimeout
+
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 			DialContext: (&net.Dialer{
-				Timeout:   timeout,
+				Timeout:   connectTimeout, // Enforce TCP Handshake limit
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
+			ResponseHeaderTimeout: connectTimeout, // Enforce TTFB limit
 		},
-		Timeout: timeout + (2 * time.Second),
+		Timeout: totalTimeout, // Enforce Total Duration limit
 	}
 }
 
@@ -169,8 +217,20 @@ func (t *Tester) ResolveHost(host string) (*AnalysisResult, error) {
 		return &AnalysisResult{IP: host, ISP: geo.ISP, Country: geo.Country}, nil
 	}
 
-	// DNS Lookup
-	ips, err := net.LookupIP(host)
+	// DNS Lookup with Retries
+	var ips []net.IP
+	var err error
+
+	for i := 0; i <= t.cfg.Retries; i++ {
+		ips, err = net.LookupIP(host)
+		if err == nil && len(ips) > 0 {
+			break
+		}
+		if i < t.cfg.Retries {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+
 	if err != nil || len(ips) == 0 {
 		return nil, fmt.Errorf("dns lookup failed for %s", host)
 	}

@@ -44,8 +44,24 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 	branch, _ := config["branch"].(string)
 	msg, _ := config["message"].(string)
 
+	// New: Configurable API URL for Gitea/GitHub Enterprise
+	apiBase, _ := config["api_url"].(string)
+	if apiBase == "" {
+		apiBase = "https://api.github.com"
+	}
+	// Normalize URL (remove trailing slash)
+	apiBase = strings.TrimRight(apiBase, "/")
+
+	// Determine Timeout (Injected from CMD)
+	timeout := 30 * time.Second // Fallback
+	if tVal, ok := config["_timeout"]; ok {
+		if t, ok := tVal.(time.Duration); ok {
+			timeout = t
+		}
+	}
+
 	if token == "" || owner == "" || repo == "" || path == "" {
-		return fmt.Errorf("github publisher requires token, owner, repo, and path")
+		return fmt.Errorf("git publisher requires token, owner, repo, and path")
 	}
 	if msg == "" {
 		msg = "Update proxy subscription [rizznet]"
@@ -53,10 +69,12 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 
 	// Clean path
 	path = strings.TrimPrefix(path, "/")
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contents/%s", owner, repo, path)
+	
+	// Dynamic API URL Construction
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/contents/%s", apiBase, owner, repo, path)
 	
 	// 3. Setup Client with Proxy Support
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: timeout}
 
 	if proxyVal, ok := config["_proxy_url"]; ok {
 		if proxyStr, ok := proxyVal.(string); ok && proxyStr != "" {
@@ -64,7 +82,7 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 				client.Transport = &http.Transport{
 					Proxy: http.ProxyURL(u),
 				}
-				logger.Log.Debugf("GitHub Publisher using proxy: %s", proxyStr)
+				logger.Log.Debugf("Git Publisher using proxy: %s", proxyStr)
 			}
 		}
 	}
@@ -73,6 +91,7 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 	var currentSha string
 	
 	reqGet, _ := http.NewRequest("GET", apiURL, nil)
+	// 'Bearer' is standard for GitHub and modern Gitea (1.14+)
 	reqGet.Header.Set("Authorization", "Bearer "+token)
 	reqGet.Header.Set("Accept", "application/vnd.github.v3+json")
 	
@@ -82,10 +101,10 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 		reqGet.URL.RawQuery = q.Encode()
 	}
 
-	logger.Log.Debugf("GitHub: Fetching file info from %s", apiURL)
+	logger.Log.Debugf("Git: Fetching file info from %s", apiURL)
 	respGet, err := client.Do(reqGet)
 	if err != nil {
-		return fmt.Errorf("github fetch failed: %w", err)
+		return fmt.Errorf("git fetch failed: %w", err)
 	}
 	defer respGet.Body.Close()
 
@@ -93,18 +112,18 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 	case 200:
 		var existing githubFileResponse
 		if err := json.NewDecoder(respGet.Body).Decode(&existing); err != nil {
-			return fmt.Errorf("failed to parse github response: %w", err)
+			return fmt.Errorf("failed to parse git response: %w", err)
 		}
 		currentSha = existing.Sha
-		logger.Log.Debugf("GitHub: File exists (SHA: %s), updating...", currentSha)
+		logger.Log.Debugf("Git: File exists (SHA: %s), updating...", currentSha)
 
 	case 404:
 		currentSha = ""
-		logger.Log.Debugf("GitHub: File not found, creating new...")
+		logger.Log.Debugf("Git: File not found, creating new...")
 
 	default:
 		bodyBytes, _ := io.ReadAll(respGet.Body)
-		return fmt.Errorf("github get error (%d): %s", respGet.StatusCode, string(bodyBytes))
+		return fmt.Errorf("git get error (%d): %s", respGet.StatusCode, string(bodyBytes))
 	}
 
 	// 5. Upload File (PUT)
@@ -125,18 +144,20 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 
 	respPut, err := client.Do(reqPut)
 	if err != nil {
-		return fmt.Errorf("failed to connect to github: %w", err)
+		return fmt.Errorf("failed to connect to git host: %w", err)
 	}
 	defer respPut.Body.Close()
 
 	if respPut.StatusCode < 200 || respPut.StatusCode >= 300 {
 		bodyBytes, _ := io.ReadAll(respPut.Body)
-		return fmt.Errorf("github api error (%d): %s", respPut.StatusCode, string(bodyBytes))
+		return fmt.Errorf("git api error (%d): %s", respPut.StatusCode, string(bodyBytes))
 	}
 
 	return nil
 }
 
 func init() {
+	// Registered as 'github' for backward compatibility, 
+	// but functions as a generic Git HTTP API publisher.
 	publishers.Register("github", func() publishers.Publisher { return &Publisher{} })
 }

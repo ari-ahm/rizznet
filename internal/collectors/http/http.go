@@ -22,9 +22,17 @@ func (c *URLCollector) Collect(config map[string]interface{}) ([]string, error) 
 	}
 	targetURL := urlVal.(string)
 
+	// Determine Timeout (Injected from CMD)
+	timeout := 120 * time.Second // Fallback
+	if tVal, ok := config["_timeout"]; ok {
+		if t, ok := tVal.(time.Duration); ok {
+			timeout = t
+		}
+	}
+
 	// 2. Setup Client
 	client := &http.Client{
-		Timeout: 120 * time.Second,
+		Timeout: timeout,
 	}
 
 	// 3. Check for Internal Proxy Injection
@@ -41,7 +49,7 @@ func (c *URLCollector) Collect(config map[string]interface{}) ([]string, error) 
 	}
 
 	// 4. Fetch
-	logger.Log.Debugf("Fetching URL: %s", targetURL)
+	logger.Log.Debugf("Fetching URL: %s (Timeout: %s)", targetURL, timeout)
 	resp, err := client.Get(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch url: %w", err)

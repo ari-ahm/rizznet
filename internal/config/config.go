@@ -24,13 +24,14 @@ type DatabaseConfig struct {
 
 type SystemProxyConfig struct {
 	Enabled  bool   `yaml:"enabled"`
-	Category string `yaml:"category"` // Configurable category name
+	Category string `yaml:"category"`
 	Fallback string `yaml:"fallback"`
 }
 
 type TesterConfig struct {
 	HealthTimeout time.Duration `yaml:"health_timeout"`
 	SpeedTimeout  time.Duration `yaml:"speed_timeout"`
+	Retries       int           `yaml:"retries"`
 
 	EchoURL string `yaml:"echo_url"`
 
@@ -79,6 +80,7 @@ func Load(path string) (*Config, error) {
 	// Defaults
 	cfg.Tester.HealthTimeout = 8 * time.Second
 	cfg.Tester.SpeedTimeout = 45 * time.Second
+	cfg.Tester.Retries = 1 // Default: 1 Retry (2 Attempts total)
 	cfg.Tester.EchoURL = "http://api.ipify.org"
 	cfg.Tester.GeoIPASNPath = "GeoLite2-ASN.mmdb"
 	cfg.Tester.GeoIPCountryPath = "GeoLite2-Country.mmdb"
