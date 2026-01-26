@@ -159,11 +159,12 @@ func (a *Annealer) Run(maxDataMB int) {
 
 		testedProxies[candidate.Proxy.ID] = true
 
+		logger.Log.Debugf("Now testing : " + candidate.Proxy.Raw)
 		shortLink := candidate.Proxy.Raw
 		if len(shortLink) > 15 {
 			shortLink = shortLink[:12] + "..."
 		}
-		bar.Describe(fmt.Sprintf("[yellow]Found: %d | Testing: %s[reset]", survivorsCount, shortLink))
+		bar.Describe(fmt.Sprintf("[yellow]Found: %d(%d/%d) | Testing: %s[reset]", survivorsCount, len(testedProxies), len(a.candidates), shortLink))
 
 		port, instance, err := xray.StartEphemeral(candidate.Proxy.Raw)
 		if err != nil {

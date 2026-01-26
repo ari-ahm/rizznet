@@ -66,7 +66,11 @@ var testCmd = &cobra.Command{
 
 		env, err := environment.Detect(cfg.Tester, true)
 		if err != nil {
-			logger.Log.Fatalf("Environment check failed: %v", err)
+			logger.Log.Errorf("Environment check failed. Using fallbacks: %v", err)
+			env = &environment.Env{
+				ISP:           "ip-api error, not detected(i sure hope this isn't a real isp)",
+				BaselineSpeed: 1.,
+			}
 		}
 
 		// --- 1. Candidate Selection Logic ---

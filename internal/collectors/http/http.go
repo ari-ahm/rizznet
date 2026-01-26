@@ -24,7 +24,7 @@ func (c *URLCollector) Collect(config map[string]interface{}) ([]string, error) 
 
 	// 2. Setup Client
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 120 * time.Second,
 	}
 
 	// 3. Check for Internal Proxy Injection
