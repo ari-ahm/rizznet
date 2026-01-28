@@ -34,7 +34,7 @@ var (
 var testCmd = &cobra.Command{
 	Use:   "test [category_names...]",
 	Short: "Optimize proxies using Simulated Annealing",
-	Long:  `Run the optimization engine. Use --fast to skip the initial health check. Use --top-k or --only-categorized to filter selection.`,
+	Long:  `Run the optimization engine. Use --fast to skip speed tests and categorize based on health check and historical data.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg, err := config.Load(cfgFile)
 		if err != nil {
@@ -101,31 +101,30 @@ var testCmd = &cobra.Command{
 		}
 		logger.Log.Infof("   -> Target Count: %d", len(candidates))
 
-		// --- 2. Health Check Layer ---
+		// --- 2. Health Check Layer (ALWAYS RUN) ---
+		// We filter out dead proxies and update metadata (ISP/Country/Dirty)
 		historyEngine := engine.NewHistoryEngine(database)
-
-		var survivors []model.Proxy
-		if flagFast {
-			logger.Log.Info("⏩ Fast mode enabled: Skipping global health check.")
-			survivors = candidates
-		} else {
-			survivors = runHealthCheckLayer(database, historyEngine, cfg.Tester, env, candidates)
-		}
+		survivors := runHealthCheckLayer(database, historyEngine, cfg.Tester, env, candidates)
 
 		if len(survivors) == 0 {
 			logger.Log.Error("❌ No survivors after health check. Exiting.")
 			return
 		}
 
-		// --- 3. Annealing ---
-		annealer, err := engine.NewAnnealer(database, *cfg, env, survivors, flagFast)
-		if err != nil {
-			logger.Log.Fatalf("Failed to init annealer: %v", err)
+		// --- 3. Optimization / Categorization ---
+		if flagFast {
+			logger.Log.Info("⏩ Fast mode: Skipping speed tests. Categorizing based on history...")
+			engine.RunFast(database, *cfg, env, survivors)
+			logger.Log.Info("✅ Fast categorization complete.")
+		} else {
+			logger.Log.Info("🔥 Normal mode: Starting Annealing (Speed Tests)...")
+			annealer, err := engine.NewAnnealer(database, *cfg, env, survivors)
+			if err != nil {
+				logger.Log.Fatalf("Failed to init annealer: %v", err)
+			}
+			annealer.Run(cfg.Tester.AnnealBudgetMB)
+			logger.Log.Info("✅ Testing and optimization complete.")
 		}
-
-		annealer.Run(cfg.Tester.AnnealBudgetMB)
-
-		logger.Log.Info("✅ Testing and optimization complete.")
 	},
 }
 
@@ -260,7 +259,7 @@ func runHealthCheckLayer(
 func init() {
 	testCmd.Flags().IntVar(&flagWorkers, "workers", 0, "Override worker count")
 	testCmd.Flags().IntVar(&flagBudget, "budget", 0, "Override data budget (MB)")
-	testCmd.Flags().BoolVar(&flagFast, "fast", false, "Skip initial health check")
+	testCmd.Flags().BoolVar(&flagFast, "fast", false, "Skip speed tests; categorize based on health check and history")
 
 	testCmd.Flags().BoolVar(&flagOnlyCategorized, "only-categorized", false, "Only test proxies that are already in a category")
 	testCmd.Flags().IntVar(&flagTopK, "top-k", 0, "Only test the top K proxies based on historical score")

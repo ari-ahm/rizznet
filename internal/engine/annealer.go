@@ -16,18 +16,16 @@ import (
 
 	"github.com/schollz/progressbar/v3"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type Annealer struct {
-	db                *gorm.DB
-	history           *HistoryEngine
-	tester            *tester.Tester
-	testerCfg         config.TesterConfig
-	env               *environment.Env
-	categories        []CategoryContext
-	candidates        []Candidate
-	strictHealthCheck bool
+	db         *gorm.DB
+	history    *HistoryEngine
+	tester     *tester.Tester
+	testerCfg  config.TesterConfig
+	env        *environment.Env
+	categories []CategoryContext
+	candidates []Candidate
 }
 
 type CategoryContext struct {
@@ -44,24 +42,11 @@ type Candidate struct {
 	MatchingCatIndices []int
 }
 
-func NewAnnealer(db *gorm.DB, cfg config.Config, env *environment.Env, aliveProxies []model.Proxy, strictHealthCheck bool) (*Annealer, error) {
+func NewAnnealer(db *gorm.DB, cfg config.Config, env *environment.Env, aliveProxies []model.Proxy) (*Annealer, error) {
 	hist := NewHistoryEngine(db)
 	tst := tester.New(cfg.Tester)
 
-	var catContexts []CategoryContext
-	for i, catCfg := range cfg.Categories {
-		strat, err := categories.Get(catCfg.Strategy)
-		if err != nil {
-			logger.Log.Warnf("Skipping category %s: %v", catCfg.Name, err)
-			continue
-		}
-		catContexts = append(catContexts, CategoryContext{
-			Index:    i,
-			Config:   catCfg,
-			Strategy: strat,
-			Bucket:   NewBucket(catCfg.BucketSize),
-		})
-	}
+	catContexts := setupCategoryContexts(cfg)
 
 	var candidates []Candidate
 	for _, p := range aliveProxies {
@@ -89,14 +74,13 @@ func NewAnnealer(db *gorm.DB, cfg config.Config, env *environment.Env, aliveProx
 	})
 
 	return &Annealer{
-		db:                db,
-		history:           hist,
-		tester:            tst,
-		testerCfg:         cfg.Tester,
-		env:               env,
-		categories:        catContexts,
-		candidates:        candidates,
-		strictHealthCheck: strictHealthCheck,
+		db:         db,
+		history:    hist,
+		tester:     tst,
+		testerCfg:  cfg.Tester,
+		env:        env,
+		categories: catContexts,
+		candidates: candidates,
 	}, nil
 }
 
@@ -171,40 +155,7 @@ func (a *Annealer) Run(maxDataMB int) {
 			continue
 		}
 
-		if a.strictHealthCheck {
-			analyzeClient := a.tester.MakeClient(port, a.testerCfg.HealthTimeout)
-			res, err := a.tester.Analyze(analyzeClient)
-
-			if err != nil {
-				instance.Close()
-				a.history.UpdateHistory(candidate.Proxy.ID, a.env.ISP, 0.0, a.env.BaselineSpeed)
-				continue
-			}
-
-			isRotating := candidate.Proxy.IsRotating
-			if !isRotating {
-				if candidate.Proxy.ISP != "" && candidate.Proxy.Country != "" {
-					if res.ISP != candidate.Proxy.ISP || res.Country != candidate.Proxy.Country {
-						isRotating = true
-						logger.Log.Debugf("🔄 Detected Rotation for Proxy %d", candidate.Proxy.ID)
-					}
-				}
-			}
-
-			candidate.Proxy.IP = res.IP
-			candidate.Proxy.ISP = res.ISP
-			candidate.Proxy.Country = res.Country
-			candidate.Proxy.IsDirty = res.IsDirty
-			candidate.Proxy.IsRotating = isRotating
-
-			go func(p model.Proxy) {
-				a.db.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "id"}},
-					DoUpdates: clause.AssignmentColumns([]string{"ip", "isp", "country", "is_dirty", "is_rotating"}),
-				}).Create(&p)
-			}(candidate.Proxy)
-		}
-
+		// Perform Speed Test
 		speedClient := a.tester.MakeClient(port, a.testerCfg.SpeedTimeout)
 		mbps, bytesDownloaded, err := a.tester.SpeedCheck(speedClient)
 
@@ -244,16 +195,68 @@ func (a *Annealer) Run(maxDataMB int) {
 	bar.Finish()
 	fmt.Print("\n")
 	logger.Log.Info("🏁 Optimization Finished.")
-	a.saveResults()
+	saveCategories(a.db, a.categories)
 }
 
-func (a *Annealer) saveResults() {
+// RunFast handles the --fast logic: categorize based on Health Check survivors and History scores, without new speed tests.
+func RunFast(db *gorm.DB, cfg config.Config, env *environment.Env, survivors []model.Proxy) {
+	hist := NewHistoryEngine(db)
+	catContexts := setupCategoryContexts(cfg)
+
+	logger.Log.Info("⚡ Distributing survivors to categories based on historical performance...")
+
+	count := 0
+	for _, p := range survivors {
+		// Get existing score from DB
+		score := hist.GetPredictiveScore(p.ID, env.ISP)
+
+		// If proxy has no score (0.2 default from cold start), it might still be categorized if strategy allows
+		// Usually we want at least some track record, but cold start is fine for "clean" category.
+
+		// Check against all categories
+		for _, ctx := range catContexts {
+			if ctx.Strategy.IsCandidate(p, ctx.Config.Params) {
+				// Strategy might re-weight the score (e.g. boost low latency if metadata available)
+				finalScore := ctx.Strategy.Score(score, p, ctx.Config.Params)
+				
+				// Offer to bucket
+				if ctx.Bucket.Offer(p, finalScore) {
+					count++
+				}
+			}
+		}
+	}
+
+	saveCategories(db, catContexts)
+}
+
+// Helper to init buckets
+func setupCategoryContexts(cfg config.Config) []CategoryContext {
+	var catContexts []CategoryContext
+	for i, catCfg := range cfg.Categories {
+		strat, err := categories.Get(catCfg.Strategy)
+		if err != nil {
+			logger.Log.Warnf("Skipping category %s: %v", catCfg.Name, err)
+			continue
+		}
+		catContexts = append(catContexts, CategoryContext{
+			Index:    i,
+			Config:   catCfg,
+			Strategy: strat,
+			Bucket:   NewBucket(catCfg.BucketSize),
+		})
+	}
+	return catContexts
+}
+
+// Helper to save results to DB
+func saveCategories(db *gorm.DB, contexts []CategoryContext) {
 	logger.Log.Info("💾 Saving Categories to Database...")
-	for _, ctx := range a.categories {
+	for _, ctx := range contexts {
 		survivors := ctx.Bucket.GetProxies()
 		var dbCat model.Category
-		a.db.FirstOrCreate(&dbCat, model.Category{Name: ctx.Config.Name})
-		a.db.Model(&dbCat).Association("Proxies").Replace(survivors)
+		db.FirstOrCreate(&dbCat, model.Category{Name: ctx.Config.Name})
+		db.Model(&dbCat).Association("Proxies").Replace(survivors)
 		logger.Log.Infof("   -> %s: Saved %d proxies.", ctx.Config.Name, len(survivors))
 	}
 }
