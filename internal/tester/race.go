@@ -78,9 +78,6 @@ func (t *Tester) FindFirstAlive(links []string, targetURL string) (int, *core.In
 func (t *Tester) checkSimple(port int, url string) bool {
 	client := t.MakeClient(port, t.cfg.HealthTimeout)
 	
-	// Retry loop is implicit if we use t.Analyze, but Analyze does heavy GeoIP parsing.
-	// We just want a simple 200 OK check here with the Configured Retries.
-	
 	for i := 0; i <= t.cfg.Retries; i++ {
 		// Create a context for the request
 		ctx, cancel := context.WithTimeout(context.Background(), t.cfg.HealthTimeout)
@@ -95,12 +92,6 @@ func (t *Tester) checkSimple(port int, url string) bool {
 			}
 		}
 		cancel() // Clean up context
-
-		// Backoff
-		if i < t.cfg.Retries {
-			// Fast backoff for race
-			// We don't sleep here to block the thread, but since we are in a goroutine it's fine.
-		}
 	}
 	
 	return false

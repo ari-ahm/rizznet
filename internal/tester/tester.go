@@ -11,6 +11,7 @@ import (
 
 	"rizznet/internal/config"
 	"rizznet/internal/geoip"
+	"rizznet/internal/metrics" 
 	"rizznet/internal/xray"
 )
 
@@ -29,16 +30,33 @@ func New(cfg config.TesterConfig) *Tester {
 	return &Tester{cfg: cfg}
 }
 
-func (t *Tester) Analyze(client *http.Client) (*AnalysisResult, error) {
+// Analyze performs a full check (IP, ISP, Country, Dirty) and records metrics.
+func (t *Tester) Analyze(client *http.Client, mc *metrics.Collector) (*AnalysisResult, error) {
 	var lastErr error
 	
 	// Retry Loop
 	for i := 0; i <= t.cfg.Retries; i++ {
+		start := time.Now()
+		
 		res, err := t.doAnalyze(client)
+		
+		duration := time.Since(start)
+
 		if err == nil {
+			// Success
+			if mc != nil {
+				mc.RecordSuccess(i, duration)
+			}
 			return res, nil
 		}
+
+		// Failure
 		lastErr = err
+		
+		if mc != nil {
+			mc.RecordFailure(err)
+		}
+
 		// Brief backoff
 		if i < t.cfg.Retries {
 			time.Sleep(200 * time.Millisecond)
@@ -63,16 +81,13 @@ func (t *Tester) doAnalyze(client *http.Client) (*AnalysisResult, error) {
 		return nil, err
 	}
 
-	// Clean up IP string (trim whitespace)
 	ipStr := strings.TrimSpace(string(body))
 	if ipStr == "" {
 		return nil, fmt.Errorf("empty response from echo service")
 	}
 
-	// 2. Local GeoIP Lookup
 	geo, err := geoip.Lookup(ipStr)
 	if err != nil {
-		// If GeoIP fails, we still have a working proxy, return bare minimum
 		geo = &geoip.GeoResult{ISP: "Unknown", Country: "XX"}
 	}
 
@@ -83,7 +98,6 @@ func (t *Tester) doAnalyze(client *http.Client) (*AnalysisResult, error) {
 		IsDirty: false,
 	}
 
-	// 3. Dirty Check (Optional)
 	if t.cfg.DirtyCheckURL != "" {
 		dirtyResp, err := client.Get(t.cfg.DirtyCheckURL)
 		if err == nil && dirtyResp.StatusCode == 200 {
@@ -97,13 +111,17 @@ func (t *Tester) doAnalyze(client *http.Client) (*AnalysisResult, error) {
 	return res, nil
 }
 
+// AnalyzeFromLink starts a temporary Xray instance and runs Analyze.
+// Metrics are passed as nil since this is usually an ad-hoc check.
 func (t *Tester) AnalyzeFromLink(link string) (*AnalysisResult, error) {
 	port, instance, err := xray.StartEphemeral(link)
 	if err != nil {
 		return nil, err
 	}
 	defer instance.Close()
-	return t.Analyze(t.MakeClient(port, t.cfg.HealthTimeout))
+	
+	// pass nil for metrics
+	return t.Analyze(t.MakeClient(port, t.cfg.HealthTimeout), nil)
 }
 
 func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
@@ -111,14 +129,12 @@ func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
 	var written int64
 	var lastErr error
 
-	// Retry Loop
 	for i := 0; i <= t.cfg.Retries; i++ {
 		m, w, err := t.doSpeedCheck(client)
 		if err == nil {
 			return m, w, nil
 		}
 		lastErr = err
-		// Keep best effort data count
 		if w > written {
 			written = w 
 		}
@@ -133,7 +149,6 @@ func (t *Tester) SpeedCheck(client *http.Client) (float64, int64, error) {
 func (t *Tester) doSpeedCheck(client *http.Client) (float64, int64, error) {
 	req, _ := http.NewRequest("GET", t.cfg.SpeedTestURL, nil)
 
-	// Note: We do NOT start the timer here. We exclude TTFB.
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, 0, err
@@ -144,7 +159,6 @@ func (t *Tester) doSpeedCheck(client *http.Client) (float64, int64, error) {
 		return 0, 0, fmt.Errorf("speedtest download failed: %d", resp.StatusCode)
 	}
 
-	// Start timer ONLY after headers are received and body is ready to stream
 	start := time.Now()
 
 	buf := make([]byte, 32*1024)
@@ -192,32 +206,27 @@ func (t *Tester) SpeedCheckFromLink(link string) (float64, int64, error) {
 func (t *Tester) MakeClient(port int, totalTimeout time.Duration) *http.Client {
 	proxyURL, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", port))
 	
-	// Requirement: Connection and Headers must happen within HealthTimeout
-	// even if the total operation (like SpeedTest) is allowed to take longer.
 	connectTimeout := t.cfg.HealthTimeout
 
 	return &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 			DialContext: (&net.Dialer{
-				Timeout:   connectTimeout, // Enforce TCP Handshake limit
+				Timeout:   connectTimeout,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
-			ResponseHeaderTimeout: connectTimeout, // Enforce TTFB limit
+			ResponseHeaderTimeout: connectTimeout,
 		},
-		Timeout: totalTimeout, // Enforce Total Duration limit
+		Timeout: totalTimeout,
 	}
 }
 
-// ResolveHost resolves the target host to an IP and looks up metadata locally.
 func (t *Tester) ResolveHost(host string) (*AnalysisResult, error) {
-	// If host is already an IP
 	if net.ParseIP(host) != nil {
 		geo, _ := geoip.Lookup(host)
 		return &AnalysisResult{IP: host, ISP: geo.ISP, Country: geo.Country}, nil
 	}
 
-	// DNS Lookup with Retries
 	var ips []net.IP
 	var err error
 

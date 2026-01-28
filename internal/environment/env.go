@@ -19,7 +19,7 @@ func Detect(cfg config.TesterConfig, performSpeedTest bool) (*Env, error) {
 	t := tester.New(cfg)
 	directClient := &http.Client{Timeout: cfg.HealthTimeout}
 
-	meta, err := t.Analyze(directClient)
+	meta, err := t.Analyze(directClient, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect ISP: %w", err)
 	}

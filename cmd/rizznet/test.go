@@ -13,6 +13,7 @@ import (
 	"rizznet/internal/environment"
 	"rizznet/internal/geoip"
 	"rizznet/internal/logger"
+	"rizznet/internal/metrics"
 	"rizznet/internal/model"
 	"rizznet/internal/tester"
 	"rizznet/internal/xray"
@@ -101,17 +102,20 @@ var testCmd = &cobra.Command{
 		}
 		logger.Log.Infof("   -> Target Count: %d", len(candidates))
 
-		// --- 2. Health Check Layer (ALWAYS RUN) ---
-		// We filter out dead proxies and update metadata (ISP/Country/Dirty)
+		// --- 2. Health Check Layer ---
+		metricsCollector := metrics.New()
 		historyEngine := engine.NewHistoryEngine(database)
-		survivors := runHealthCheckLayer(database, historyEngine, cfg.Tester, env, candidates)
+		
+		survivors := runHealthCheckLayer(database, historyEngine, cfg.Tester, env, candidates, metricsCollector)
+
+		metricsCollector.PrintReport(cfg.Tester.HealthTimeout, cfg.Tester.Retries)
 
 		if len(survivors) == 0 {
 			logger.Log.Error("❌ No survivors after health check. Exiting.")
 			return
 		}
 
-		// --- 3. Optimization / Categorization ---
+		// --- 3. Optimization ---
 		if flagFast {
 			logger.Log.Info("⏩ Fast mode: Skipping speed tests. Categorizing based on history...")
 			engine.RunFast(database, *cfg, env, survivors)
@@ -134,6 +138,7 @@ func runHealthCheckLayer(
 	testCfg config.TesterConfig,
 	env *environment.Env,
 	inputProxies []model.Proxy,
+	mc *metrics.Collector, // Pass collector
 ) []model.Proxy {
 	batchSize := testCfg.WorkerCount
 	if batchSize <= 0 {
@@ -209,7 +214,7 @@ func runHealthCheckLayer(
 				defer bar.Add(1)
 
 				analyzeClient := t.MakeClient(localPort, testCfg.HealthTimeout)
-				res, err := t.Analyze(analyzeClient)
+				res, err := t.Analyze(analyzeClient, mc)
 
 				if err != nil {
 					hist.UpdateHistory(proxy.ID, env.ISP, 0.0, env.BaselineSpeed)
