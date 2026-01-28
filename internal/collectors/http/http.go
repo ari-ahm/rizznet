@@ -22,11 +22,18 @@ func (c *URLCollector) Collect(config map[string]interface{}) ([]string, error) 
 	}
 	targetURL := urlVal.(string)
 
-	// Determine Timeout (Injected from CMD)
-	timeout := 120 * time.Second // Fallback
+	// Determine Timeout & Retries (Injected from CMD)
+	timeout := 120 * time.Second 
 	if tVal, ok := config["_timeout"]; ok {
 		if t, ok := tVal.(time.Duration); ok {
 			timeout = t
+		}
+	}
+
+	retries := 0
+	if rVal, ok := config["_retries"]; ok {
+		if r, ok := rVal.(int); ok {
+			retries = r
 		}
 	}
 
@@ -48,17 +55,33 @@ func (c *URLCollector) Collect(config map[string]interface{}) ([]string, error) 
 		}
 	}
 
-	// 4. Fetch
-	logger.Log.Debugf("Fetching URL: %s (Timeout: %s)", targetURL, timeout)
-	resp, err := client.Get(targetURL)
+	// 4. Fetch with Retries
+	var resp *http.Response
+	var err error
+
+	for i := 0; i <= retries; i++ {
+		logger.Log.Debugf("Fetching URL (Attempt %d/%d): %s", i+1, retries+1, targetURL)
+		
+		resp, err = client.Get(targetURL)
+		if err == nil && resp.StatusCode == 200 {
+			break
+		}
+		
+		if err == nil {
+			// Non-200, close body and set error
+			resp.Body.Close()
+			err = fmt.Errorf("status code %d", resp.StatusCode)
+		}
+
+		if i < retries {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch url: %w", err)
+		return nil, fmt.Errorf("failed to fetch url after retries: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("non-200 status code: %d", resp.StatusCode)
-	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {

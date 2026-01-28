@@ -3,12 +3,12 @@ package main
 import (
 	"strconv"
 
+	"rizznet/internal/bootstrap"
 	"rizznet/internal/config"
 	"rizznet/internal/db"
 	"rizznet/internal/logger"
 	"rizznet/internal/model"
 	"rizznet/internal/publishers"
-	"rizznet/internal/xray"
 
 	"github.com/spf13/cobra"
 )
@@ -40,8 +40,9 @@ var publishCmd = &cobra.Command{
 			if cfg.Publishers[i].Params == nil {
 				cfg.Publishers[i].Params = make(map[string]interface{})
 			}
-			// INJECT: Speed Timeout for Publishers
+			// INJECT: Timeout and Retries
 			cfg.Publishers[i].Params["_timeout"] = cfg.Tester.SpeedTimeout
+			cfg.Publishers[i].Params["_retries"] = cfg.Tester.Retries
 
 			for k, v := range publishParams {
 				if intVal, err := strconv.Atoi(v); err == nil {
@@ -62,9 +63,7 @@ var publishCmd = &cobra.Command{
 		var activeProxy string
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager for publishing...")
-			// Use EchoURL instead of HealthURL
-			// INJECT: Health Timeout for Manager (Bootstrap) & Retries
-			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL, cfg.Tester.HealthTimeout, cfg.Tester.Retries)
+			pm := bootstrap.NewManager(database, cfg.Tester, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {

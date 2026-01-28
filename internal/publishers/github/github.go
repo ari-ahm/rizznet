@@ -44,19 +44,24 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 	branch, _ := config["branch"].(string)
 	msg, _ := config["message"].(string)
 
-	// New: Configurable API URL for Gitea/GitHub Enterprise
 	apiBase, _ := config["api_url"].(string)
 	if apiBase == "" {
 		apiBase = "https://api.github.com"
 	}
-	// Normalize URL (remove trailing slash)
 	apiBase = strings.TrimRight(apiBase, "/")
 
-	// Determine Timeout (Injected from CMD)
-	timeout := 30 * time.Second // Fallback
+	// Determine Timeout & Retries
+	timeout := 30 * time.Second
 	if tVal, ok := config["_timeout"]; ok {
 		if t, ok := tVal.(time.Duration); ok {
 			timeout = t
+		}
+	}
+
+	retries := 0
+	if rVal, ok := config["_retries"]; ok {
+		if r, ok := rVal.(int); ok {
+			retries = r
 		}
 	}
 
@@ -67,13 +72,10 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 		msg = "Update proxy subscription [rizznet]"
 	}
 
-	// Clean path
 	path = strings.TrimPrefix(path, "/")
-	
-	// Dynamic API URL Construction
 	apiURL := fmt.Sprintf("%s/repos/%s/%s/contents/%s", apiBase, owner, repo, path)
 	
-	// 3. Setup Client with Proxy Support
+	// 3. Setup Client
 	client := &http.Client{Timeout: timeout}
 
 	if proxyVal, ok := config["_proxy_url"]; ok {
@@ -87,77 +89,100 @@ func (p *Publisher) Publish(categories []model.Category, config map[string]inter
 		}
 	}
 
-	// 4. Get existing SHA
+	// 4. Get existing SHA (With Retries)
 	var currentSha string
+	var respGet *http.Response
 	
-	reqGet, _ := http.NewRequest("GET", apiURL, nil)
-	// 'Bearer' is standard for GitHub and modern Gitea (1.14+)
-	reqGet.Header.Set("Authorization", "Bearer "+token)
-	reqGet.Header.Set("Accept", "application/vnd.github.v3+json")
-	
-	if branch != "" {
-		q := reqGet.URL.Query()
-		q.Add("ref", branch)
-		reqGet.URL.RawQuery = q.Encode()
+	for i := 0; i <= retries; i++ {
+		reqGet, _ := http.NewRequest("GET", apiURL, nil)
+		reqGet.Header.Set("Authorization", "Bearer "+token)
+		reqGet.Header.Set("Accept", "application/vnd.github.v3+json")
+		
+		if branch != "" {
+			q := reqGet.URL.Query()
+			q.Add("ref", branch)
+			reqGet.URL.RawQuery = q.Encode()
+		}
+
+		logger.Log.Debugf("Git: Fetching file info (Attempt %d/%d)", i+1, retries+1)
+		respGet, err = client.Do(reqGet)
+		if err == nil && (respGet.StatusCode == 200 || respGet.StatusCode == 404) {
+			break
+		}
+		
+		if err == nil {
+			// Server error or unexpected status, retry
+			respGet.Body.Close()
+			err = fmt.Errorf("status %d", respGet.StatusCode)
+		}
+
+		if i < retries {
+			time.Sleep(1 * time.Second)
+		}
 	}
 
-	logger.Log.Debugf("Git: Fetching file info from %s", apiURL)
-	respGet, err := client.Do(reqGet)
 	if err != nil {
-		return fmt.Errorf("git fetch failed: %w", err)
+		return fmt.Errorf("git fetch failed after retries: %w", err)
 	}
 	defer respGet.Body.Close()
 
-	switch respGet.StatusCode {
-	case 200:
+	if respGet.StatusCode == 200 {
 		var existing githubFileResponse
 		if err := json.NewDecoder(respGet.Body).Decode(&existing); err != nil {
 			return fmt.Errorf("failed to parse git response: %w", err)
 		}
 		currentSha = existing.Sha
 		logger.Log.Debugf("Git: File exists (SHA: %s), updating...", currentSha)
-
-	case 404:
+	} else if respGet.StatusCode == 404 {
 		currentSha = ""
 		logger.Log.Debugf("Git: File not found, creating new...")
-
-	default:
-		bodyBytes, _ := io.ReadAll(respGet.Body)
-		return fmt.Errorf("git get error (%d): %s", respGet.StatusCode, string(bodyBytes))
+	} else {
+		// Should be caught by loop, but safe fallback
+		return fmt.Errorf("git unexpected status: %d", respGet.StatusCode)
 	}
 
-	// 5. Upload File (PUT)
+	// 5. Upload File (PUT) (With Retries)
 	contentEncoded := base64.StdEncoding.EncodeToString([]byte(payload))
-
 	reqBody := githubFileRequest{
 		Message: msg,
 		Content: contentEncoded,
 		Sha:     currentSha,
 		Branch:  branch,
 	}
-	
 	jsonBody, _ := json.Marshal(reqBody)
-	reqPut, _ := http.NewRequest("PUT", apiURL, bytes.NewBuffer(jsonBody))
-	reqPut.Header.Set("Authorization", "Bearer "+token)
-	reqPut.Header.Set("Content-Type", "application/json")
-	reqPut.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	respPut, err := client.Do(reqPut)
+	var respPut *http.Response
+	for i := 0; i <= retries; i++ {
+		reqPut, _ := http.NewRequest("PUT", apiURL, bytes.NewBuffer(jsonBody))
+		reqPut.Header.Set("Authorization", "Bearer "+token)
+		reqPut.Header.Set("Content-Type", "application/json")
+		reqPut.Header.Set("Accept", "application/vnd.github.v3+json")
+
+		logger.Log.Debugf("Git: Uploading file (Attempt %d/%d)", i+1, retries+1)
+		respPut, err = client.Do(reqPut)
+		if err == nil && (respPut.StatusCode >= 200 && respPut.StatusCode < 300) {
+			break
+		}
+
+		if err == nil {
+			bodyBytes, _ := io.ReadAll(respPut.Body)
+			respPut.Body.Close()
+			err = fmt.Errorf("status %d: %s", respPut.StatusCode, string(bodyBytes))
+		}
+
+		if i < retries {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 	if err != nil {
-		return fmt.Errorf("failed to connect to git host: %w", err)
+		return fmt.Errorf("git upload failed after retries: %w", err)
 	}
 	defer respPut.Body.Close()
-
-	if respPut.StatusCode < 200 || respPut.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(respPut.Body)
-		return fmt.Errorf("git api error (%d): %s", respPut.StatusCode, string(bodyBytes))
-	}
 
 	return nil
 }
 
 func init() {
-	// Registered as 'github' for backward compatibility, 
-	// but functions as a generic Git HTTP API publisher.
 	publishers.Register("github", func() publishers.Publisher { return &Publisher{} })
 }

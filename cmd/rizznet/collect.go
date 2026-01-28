@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"rizznet/internal/bootstrap"
 	"rizznet/internal/collectors"
 	_ "rizznet/internal/collectors/http"
 	_ "rizznet/internal/collectors/telegram"
@@ -49,7 +50,6 @@ var collectCmd = &cobra.Command{
 				logger.Log.Fatalf("Failed to read from stdin: %v", err)
 			}
 
-			// ExtractLinks handles deduplication and base64 decoding automatically
 			links := xray.ExtractLinks(string(data))
 			if len(links) == 0 {
 				logger.Log.Warn("No valid links found in stdin.")
@@ -76,8 +76,9 @@ var collectCmd = &cobra.Command{
 			if cfg.Collectors[i].Params == nil {
 				cfg.Collectors[i].Params = make(map[string]interface{})
 			}
-			// INJECT: Speed Timeout for Collectors
+			// INJECT: Timeout and Retries
 			cfg.Collectors[i].Params["_timeout"] = cfg.Tester.SpeedTimeout
+			cfg.Collectors[i].Params["_retries"] = cfg.Tester.Retries
 
 			for k, v := range collectParams {
 				if intVal, err := strconv.Atoi(v); err == nil {
@@ -91,9 +92,7 @@ var collectCmd = &cobra.Command{
 		var activeProxy string
 		if cfg.SystemProxy.Enabled && !noProxy {
 			logger.Log.Info("🛡️  Initializing internal proxy manager...")
-			// Use EchoURL instead of HealthURL for proxy checks
-			// INJECT: Health Timeout for Manager (Bootstrap) & Retries
-			pm := xray.NewManager(database, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback, cfg.Tester.EchoURL, cfg.Tester.HealthTimeout, cfg.Tester.Retries)
+			pm := bootstrap.NewManager(database, cfg.Tester, cfg.SystemProxy.Category, cfg.SystemProxy.Fallback)
 
 			proxyAddr, err := pm.GetProxy()
 			if err != nil {
@@ -130,7 +129,6 @@ var collectCmd = &cobra.Command{
 	},
 }
 
-// saveProxies parses raw links, hashes them, and performs a batch insert into the DB.
 func saveProxies(db *gorm.DB, rawLinks []string, source string) int64 {
 	var batch []model.Proxy
 
