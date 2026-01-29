@@ -85,7 +85,7 @@ func (c *Collector) PrintReport(currentTimeout time.Duration, currentRetries int
 		p50 := c.latencies[len(c.latencies)/2]
 		p90 := c.latencies[int(float64(len(c.latencies))*0.9)]
 		
-		fmt.Fprintln(w, "\033[1;36m[ LATENCY (Successful Proxies) ]\033[0m")
+		fmt.Fprintln(w, "\033[1;36m[ LATENCY (Max Per-Request) ]\033[0m")
 		fmt.Fprintf(w, "  Avg Duration:\t%v\n", average(c.latencies))
 		fmt.Fprintf(w, "  p50 (Median):\t%v\n", p50)
 		fmt.Fprintf(w, "  p90 (Slowest 10%%):\t%v\n", p90)

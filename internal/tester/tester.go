@@ -36,16 +36,15 @@ func (t *Tester) Analyze(client *http.Client, mc *metrics.Collector) (*AnalysisR
 	
 	// Retry Loop
 	for i := 0; i <= t.cfg.Retries; i++ {
-		start := time.Now()
+		// Fix: We calculate maxReqDuration inside doAnalyze.
+		// This represents the slowest single request in the chain.
+		// We use this for metrics because 'health_timeout' config applies per-request.
+		res, maxReqDuration, err := t.doAnalyze(client)
 		
-		res, err := t.doAnalyze(client)
-		
-		duration := time.Since(start)
-
 		if err == nil {
 			// Success
 			if mc != nil {
-				mc.RecordSuccess(i, duration)
+				mc.RecordSuccess(i, maxReqDuration)
 			}
 			return res, nil
 		}
@@ -65,25 +64,35 @@ func (t *Tester) Analyze(client *http.Client, mc *metrics.Collector) (*AnalysisR
 	return nil, lastErr
 }
 
-func (t *Tester) doAnalyze(client *http.Client) (*AnalysisResult, error) {
+// doAnalyze returns the result and the duration of the slowest individual request.
+func (t *Tester) doAnalyze(client *http.Client) (*AnalysisResult, time.Duration, error) {
+	var maxDuration time.Duration
+
+	// 1. Echo Request
+	start1 := time.Now()
 	resp, err := client.Get(t.cfg.EchoURL)
+	dur1 := time.Since(start1)
+	if dur1 > maxDuration {
+		maxDuration = dur1
+	}
+
 	if err != nil {
-		return nil, err
+		return nil, maxDuration, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("echo failed with status: %d", resp.StatusCode)
+		return nil, maxDuration, fmt.Errorf("echo failed with status: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, maxDuration, err
 	}
 
 	ipStr := strings.TrimSpace(string(body))
 	if ipStr == "" {
-		return nil, fmt.Errorf("empty response from echo service")
+		return nil, maxDuration, fmt.Errorf("empty response from echo service")
 	}
 
 	geo, err := geoip.Lookup(ipStr)
@@ -98,17 +107,26 @@ func (t *Tester) doAnalyze(client *http.Client) (*AnalysisResult, error) {
 		IsDirty: false,
 	}
 
+	// 2. Dirty Check Request (Optional)
 	if t.cfg.DirtyCheckURL != "" {
+		start2 := time.Now()
 		dirtyResp, err := client.Get(t.cfg.DirtyCheckURL)
+		dur2 := time.Since(start2)
+		if dur2 > maxDuration {
+			maxDuration = dur2
+		}
+
 		if err == nil && dirtyResp.StatusCode == 200 {
 			res.IsDirty = false
 			dirtyResp.Body.Close()
 		} else {
 			res.IsDirty = true
+			// Note: A network failure here marks it as "Dirty" rather than failing the whole test,
+			// preserving original logic.
 		}
 	}
 
-	return res, nil
+	return res, maxDuration, nil
 }
 
 // AnalyzeFromLink starts a temporary Xray instance and runs Analyze.

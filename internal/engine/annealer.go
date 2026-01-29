@@ -219,6 +219,13 @@ func RunFast(db *gorm.DB, cfg config.Config, env *environment.Env, survivors []m
 				// Strategy might re-weight the score (e.g. boost low latency if metadata available)
 				finalScore := ctx.Strategy.Score(score, p, ctx.Config.Params)
 				
+
+				shortLink := p.Raw
+				if len(shortLink) > 15 {
+					shortLink = shortLink[:12] + "..."
+				}
+				logger.Log.Debugf("Offering %s with score %f", shortLink, finalScore)
+
 				// Offer to bucket
 				if ctx.Bucket.Offer(p, finalScore) {
 					count++

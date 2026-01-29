@@ -64,7 +64,7 @@ func NewBucket(capacity int) *Bucket {
 // Offer tries to add a proxy to the bucket.
 // Returns true if added (and potentially evicted someone), false if rejected.
 func (b *Bucket) Offer(proxy model.Proxy, score float64) bool {
-	if score <= 0 {
+	if score < -1e-7 {
 		return false
 	}
 
